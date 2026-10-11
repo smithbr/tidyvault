@@ -1,0 +1,143 @@
+#!/usr/bin/env python3
+"""pm-check — read-only check of one project for the vault pm.
+
+    pm-check <project-slug> [--root DIR] [--today YYYY-MM-DD]
+
+Prints the project's phase, its open tasks by status, next-action count
+against the project state machine (Agents/gtd.md), the best queued task to
+promote, stale waiting-fors, and overdue items. Data: `vault-lint --review
+--json` plus the task files. Never writes. Stdlib only.
+"""
+
+import argparse
+import json
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+CLOSED = ("done", "cancelled")
+PRIO = {"urgent": 0, "high": 1, "med": 2, "low": 3}
+NEEDS_NEXT = ("not-started", "in-progress")
+ORDER = ("next-action", "waiting-for", "queued", "inbox", "done", "cancelled")
+
+
+def clean(v):
+    v = v.strip().strip('"').strip("'")
+    m = re.match(r"^\[\[([^\]|#]+)", v)
+    return m.group(1) if m else v
+
+
+def parse_fm(text):
+    if not text.startswith("---\n"):
+        return {}
+    end = text.find("\n---", 4)
+    if end < 0:
+        return {}
+    fm, key = {}, None
+    for ln in text[4:end].split("\n"):
+        m = re.match(r"^([a-z_]+):\s*(.*)$", ln)
+        if m:
+            key, val = m.group(1), m.group(2).strip()
+            fm[key] = clean(val) if val else []
+        elif key and ln.strip().startswith("- "):
+            if not isinstance(fm[key], list):
+                fm[key] = [fm[key]]
+            fm[key].append(clean(ln.strip()[2:]))
+    return fm
+
+
+def as_list(v):
+    return v if isinstance(v, list) else ([v] if v else [])
+
+
+def load(root, folder):
+    return {p.stem: parse_fm(p.read_text(encoding="utf-8", errors="replace"))
+            for p in sorted((root / folder).rglob("*.md"))}
+
+
+def desc(slug, fm, extra=""):
+    bits = [x for x in (fm.get("priority"), "due " + fm["due"] if fm.get("due") else "", extra) if x]
+    return f"- [[{slug}]] — {fm.get('title')}" + (f" ({', '.join(bits)})" if bits else "")
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Read-only check of one project.")
+    ap.add_argument("slug")
+    ap.add_argument("--root", default=str(HERE.parent))
+    ap.add_argument("--today")
+    a = ap.parse_args()
+    root = Path(a.root).resolve()
+    projects, archive = load(root, "Projects"), load(root, "Archive")
+    slug = a.slug.strip().removeprefix("[[").removesuffix("]]")
+    if slug not in projects:
+        print(f"Project not found: {slug}" + (" (it is in Archive/)" if slug in archive else ""), file=sys.stderr)
+        return 1
+    pfm = projects[slug]
+    cmd = [sys.executable, str(HERE / "vault-lint"), "--root", str(root), "--review", "--json", "--days", "7"]
+    if a.today:
+        cmd += ["--today", a.today]
+    p = subprocess.run(cmd, capture_output=True, text=True)
+    if not p.stdout.strip():
+        print(f"vault-lint --review failed: {p.stderr.strip()[:300]}", file=sys.stderr)
+        return 1
+    r = json.loads(p.stdout)
+    all_tasks = load(root, "Tasks")
+    tasks = {s: fm for s, fm in all_tasks.items() if fm.get("project") == slug}
+    status = pfm.get("phase")
+    P = print
+    P(f"# {pfm.get('title')} ([[{slug}]])\n")
+    P(f"Phase {status}; health {pfm.get('health', '-')}; last sweep {pfm.get('last_sweep', '-')}; "
+      f"priority {pfm.get('priority', '-')}; due {pfm.get('due', '-')}.")
+    nexts = [s for s, fm in tasks.items() if fm.get("status") == "next-action"]
+    if status in NEEDS_NEXT:
+        verdict = "OK" if nexts else "MISSING: needs at least one next action"
+    elif status in ("planned", "waiting"):
+        verdict = "OK" if not nexts else f"BREACH: {status} projects have none"
+    else:
+        verdict = "n/a"
+    P(f"Next actions: {len(nexts)}. {verdict}.\n")
+    for s, fm in tasks.items():
+        if fm.get("status") == "next-action":
+            open_b = [b for b in as_list(fm.get("blocked_by")) if b in all_tasks
+                      and all_tasks[b].get("status") not in CLOSED]
+            if open_b:
+                P(f"BREACH: [[{s}]] is next-action but blocked_by [[{open_b[0]}]].")
+    by = {}
+    for s, fm in tasks.items():
+        by.setdefault(fm.get("status"), []).append((s, fm))
+    key = lambda t: (PRIO.get(t[1].get("priority"), 4), t[1].get("due") or "9999", t[1].get("created") or "9999", t[0])
+    P("## Open tasks\n")
+    shown = False
+    for st in ORDER:
+        group = sorted(by.get(st, []), key=key)
+        if st in CLOSED:
+            if group:
+                P(f"\nClosed but still in Tasks/ ({len(group)}): " + ", ".join(f"[[{s}]]" for s, _ in group))
+            continue
+        for s, fm in group:
+            shown = True
+            extra = st
+            if st == "waiting-for":
+                extra += f" on {fm.get('waiting_on', '?')} since {fm.get('waiting_since', '?')}"
+            if fm.get("blocked_by"):
+                extra += f", blocked_by {', '.join(as_list(fm['blocked_by']))}"
+            P(desc(s, fm, extra))
+    if not shown:
+        P("None.")
+    ready = [t for t in by.get("queued", []) if all(all_tasks.get(b, {}).get("status", "done") in CLOSED
+             for b in as_list(t[1].get("blocked_by")))]
+    P("\n## Best queued task to promote\n")
+    P(desc(*sorted(ready, key=key)[0]) if ready else "None ready.")
+    stale = [w for w in r["waiting"] if w.get("project") == slug and w.get("stale")]
+    P(f"\n## Stale waiting-for ({len(stale)})\n")
+    P("\n".join(f"- [[{w['slug']}]] — {w['title']} (on {w.get('waiting_on', '?')}, {w.get('age_days', '?')} days)" for w in stale) or "None.")
+    over = [i for i in r["due"] if i.get("overdue") and (i.get("project") == slug or i["slug"] == slug)]
+    P(f"\n## Overdue ({len(over)})\n")
+    P("\n".join(f"- [[{i['slug']}]] — {i['title']} (due {i['due']}, {-i['days_left']}d late)" for i in over) or "None.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,160 @@
+#!/usr/bin/env python3
+"""Run-log chore for every role: Agents/logs/log-<agent>-YYYY-MM-DD.md.
+
+  run-log start <agent> "<what was asked>"
+  run-log end <agent> [--summary "one line"] [--changed "line"]... [--destructive "line"]...
+                      [--waiting "line"]... [--read-only]
+
+start  creates today's log (frontmatter, H1, "Part of" line, per template-log) or
+       appends a `## HH:MM — <what was asked>` section, and records the vault-lint
+       findings so `end` can say what is new. Do this before any other change.
+end    appends to the agent's open section (the last one with no `### Checks`):
+       `### Summary` (empty unless --summary), any other headings you gave lines
+       for, then `### Checks` with vault-lint before/after counts and the new
+       findings. Fill the empty Summary and add the rest by hand, a line each.
+       --read-only writes `read-only; no lint needed.` instead.
+<agent> is the role without `role-` (vault-ops), plus the project for a vault pm,
+or a short kebab-case job name. Options: --root DIR, --date, --time (for tests).
+Writes each file in one step (temp file, then mv). Python 3 standard library only.
+"""
+import argparse
+import datetime as dt
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+LINT = HERE / "vault-lint"
+MAX_NEW = 10
+
+
+def lint(root):
+    """(counts per severity, set of 'check path: message' keys), or None when vault-lint fails."""
+    p = subprocess.run([sys.executable, str(LINT), "--json", "--root", str(root)], capture_output=True, text=True)
+    try:
+        found = json.loads(p.stdout)
+    except ValueError:
+        return None
+    counts = {"error": 0, "warning": 0, "info": 0}
+    keys = set()
+    for f in found:
+        counts[f["severity"]] = counts.get(f["severity"], 0) + 1
+        keys.add(f"{f['check']} {f['path']}: {f['message']}")
+    return counts, keys
+
+
+def words(agent):
+    return agent.replace("-", " ")
+
+
+def role_link(root, agent):
+    for name in (f"role-{agent}", "role-vault-pm" if agent.startswith("vault-pm-") else "", agent):
+        if name and (root / "Agents" / "roles" / f"{name}.md").is_file():
+            return f"[[{name}]]"
+        if name and any((root / "Resources").rglob(f"{name}.md")):
+            return f"[[{name}]]"
+    return "(link the role page or job spec)"
+
+
+def write(path, text):
+    tmp = path.with_name("." + path.name + ".tmp")
+    tmp.write_text(text)
+    os.replace(tmp, path)
+
+
+def log_path(root, agent, date):
+    return root / "Agents" / "logs" / f"log-{agent}-{date}.md"
+
+
+def stash_path(root, agent, date):
+    return root / "_tmp" / f".run-log-{agent}-{date}.json"
+
+
+def start(root, agent, asked, date, time):
+    path = log_path(root, agent, date)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    heading = f"## {time} — {asked}\n"
+    if path.exists():
+        text = path.read_text().rstrip("\n") + "\n\n" + heading
+    else:
+        title = f"Log: {words(agent)} — {date}"
+        text = (f'---\ntitle: "{title}"\ntype: log\ndate: {date}\n---\n# {title}\n\n'
+                f"Part of the [[README]]. Run log for {role_link(root, agent)}.\n\n{heading}")
+    write(path, text)
+    before = lint(root)
+    stash = stash_path(root, agent, date)
+    stash.parent.mkdir(exist_ok=True)
+    if before:
+        write(stash, json.dumps({"counts": before[0], "keys": sorted(before[1])}))
+    print(f"{path.relative_to(root)}: {heading.strip()}")
+
+
+def fmt(c):
+    return f"{c['error']} errors, {c['warning']} warnings"
+
+
+def checks(root, agent, date, read_only):
+    if read_only:
+        return "- read-only; no lint needed."
+    after = lint(root)
+    if not after:
+        return "- vault-lint: crashed or missing; checked by hand."
+    stash = stash_path(root, agent, date)
+    if not stash.exists():
+        return f"- vault-lint: before not recorded; after {fmt(after[0])}."
+    prev = json.loads(stash.read_text())
+    stash.unlink()
+    new = sorted(after[1] - set(prev["keys"]))
+    line = f"- vault-lint: {fmt(prev['counts'])} before, {fmt(after[0])} after; {len(new)} new."
+    more = [f"- New: ...{len(new) - MAX_NEW} more"] if len(new) > MAX_NEW else []
+    return "\n".join([line] + [f"- New: {k}" for k in new[:MAX_NEW]] + more)
+
+
+def end(root, agent, date, a):
+    path = log_path(root, agent, date)
+    if not path.exists():
+        sys.exit(f"run-log: no log {path.relative_to(root)}; run `start` first")
+    text = path.read_text().rstrip("\n")
+    if "\n## " not in text:
+        sys.exit("run-log: no run section to end")
+    last = text.rsplit("\n## ", 1)[-1]
+    if "### Checks" in last:
+        sys.exit("run-log: the last section already has ### Checks; `start` a new one")
+    parts = [f"### Summary\n{a.summary or ''}".rstrip()]
+    for head, lines in (("Changed", a.changed), ("Destructive", a.destructive), ("Waiting on you", a.waiting)):
+        if lines:
+            parts.append(f"### {head}\n" + "\n".join(f"- {x}" for x in lines))
+    parts.append("### Checks\n" + checks(root, agent, date, a.read_only))
+    write(path, text + "\n\n" + "\n\n".join(parts) + "\n")
+    print(f"{path.relative_to(root)}: section closed")
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--root", default=str(HERE.parent))
+    p.add_argument("--date", default=dt.date.today().isoformat())
+    p.add_argument("--time", default=dt.datetime.now().strftime("%H:%M"))
+    sub = p.add_subparsers(dest="cmd", required=True)
+    s = sub.add_parser("start")
+    s.add_argument("agent")
+    s.add_argument("asked")
+    e = sub.add_parser("end")
+    e.add_argument("agent")
+    e.add_argument("--summary")
+    e.add_argument("--changed", action="append")
+    e.add_argument("--destructive", action="append")
+    e.add_argument("--waiting", action="append")
+    e.add_argument("--read-only", action="store_true")
+    a = p.parse_args()
+    root = Path(a.root)
+    if a.cmd == "start":
+        start(root, a.agent, a.asked, a.date, a.time)
+    else:
+        end(root, a.agent, a.date, a)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

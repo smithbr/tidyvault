@@ -1,0 +1,94 @@
+---
+title: Naming and style
+type: manual
+---
+# Naming and style
+
+Part of the [[README]]. Titles, filenames, and how to write. Renaming an existing file is a procedure: see [[procedures]].
+
+## Titles
+
+- **Sentence case.** Capitalize the first word and proper nouns only: "Answer Ortiz on expenses", "Router upgrade", "Settle the estate".
+- `title:` in frontmatter and the `# H1` are identical, character for character.
+- No emoji, no trailing punctuation, no bracketed prefixes like "(Archived)".
+- A Person's title is first and last name: "Theo Vale", "Lena Ortiz" (slug `theo-vale`). If the last name isn't known, use the first name alone and rename it once the last name is known. Nicknames, short names, and maiden names go in `aliases`.
+
+### Task titles
+
+2–5 words, verb first, one action. Detail, amounts, and figures go in the body.
+
+| Bad | Why | Good |
+|---|---|---|
+| Theo secures mortgage | Not verb first; it's a status | Track Theo's mortgage |
+| On The Radar call time address | No verb | Get On The Radar call time |
+| Site accuracy fixes | Noun phrase | Fix site accuracy |
+| Phase 1 pre-upgrade prep | Label, not an action | Prep Pi for upgrade |
+| Estate stuff | Vague, no visible action | Answer Ortiz on expenses |
+| Call Ortiz about the $4,049.37 utilities question from the Sep 10 email | Detail belongs in the body | Answer Ortiz on expenses |
+
+Waiting-for tasks are still verb first, from [[= owner =]]'s side: "Track Theo's mortgage", "Get merch reorder decision".
+
+### Project titles
+
+Name the outcome: "Router upgrade", "Settle the estate", "Resume update". Two to six words.
+
+## Filenames: the slug algorithm
+
+The filename is the slug of the title plus `.md`. The slug is the link target, so it never contains spaces or capitals.
+
+1. Convert accented letters to plain ASCII (é → e) and drop any other non-ASCII character (emoji, curly quotes).
+2. Lowercase.
+3. Delete apostrophes (`'` and `’`), so "Mom's" becomes "moms".
+4. Replace every run of characters that are not `a`–`z` or `0`–`9` with one hyphen.
+5. Trim hyphens from both ends.
+
+| Title | Filename |
+|---|---|
+| Mom's estate | `settle-the-estate.md` |
+| Kitchen plan - 2027 | `kitchen-plan-2027.md` |
+| Answer Ortiz on expenses | `answer-ortiz-on-expenses.md` |
+| Movies/TV to watch | `movies-tv-to-watch.md` |
+| Café list | `cafe-list.md` |
+| Log: vault ops — 2026-09-27 | `log-vault-ops-2026-09-27.md` |
+
+Reference implementation (Python, standard library):
+
+```python
+import re, unicodedata
+
+def slug(title: str) -> str:
+    s = unicodedata.normalize("NFKD", title).encode("ascii", "ignore").decode()
+    s = s.lower().replace("'", "")
+    s = re.sub(r"[^a-z0-9]+", "-", s)
+    return s.strip("-")
+```
+
+The one exception is `Agents/README.md`. `AGENTS.md`, `Home.md`, and `llms.txt` are fixed names.
+
+If the slug is already taken anywhere in the vault, make the title more specific ("Career" the Resource → "Career history"). Never add `-2`.
+
+## Writing
+
+- **Plain language, short sentences.** Tables and bullets over paragraphs when the content is a list of facts.
+- **Agent-agnostic.** No assistant or tool names in any Task, Project, Area, Resource, or Person ("the agent found", not a product name). Record facts, not provenance: what is true, not which chat it came from. A source that matters (an email, a document) is named: "Ortiz's Sep 10 email".
+- **Name the type** (Task, Project, Area, Resource, Person); never "note" for vault content. "File" is for filesystem mechanics.
+- **[[= owner =]] is "[[= owner =]]"** ([[strict-rules]] H3); "you" is fine in tasks [[= owner =]] reads. Name other people too where a pronoun would be ambiguous.
+- **Dates:** ISO in frontmatter (`2026-10-02`). In prose, "Sep 10" or "Sep 10, 2026"; add the year when it isn't this year.
+- **Links, not bare URLs:** `[Debian trixie upgrade notes](https://www.debian.org/…)`.
+- **Headings** are sentence case, `##` and below in the body. The only `#` is the title. Levels step down one at a time (no `##` straight to `####`), and a heading never ends in `.,;:!` (a `?` is fine).
+- **Straight quotes** (`'` and `"`) everywhere, titles included; no curly quotes. Numbered lists use `1.` markers.
+- **[[= owner =]]'s prose is [[= owner =]]'s:** you may fix a typo in a link or a date format; anything more is stop-and-ask 3 ([[agent-protocol]], Fix the shape, not the content).
+
+### Be brief
+
+[[= owner =]], 2026-09-28: "way more succinct in your notes. too many words when there doesn't have to be." Applies to everything an agent writes ([[strict-rules]] H10); [[= owner =]]'s own prose is left alone.
+
+- **Fact first.** No preamble ("This note records…"), no summary of the request, no closing recap.
+- **Don't restate** what the title, frontmatter, or a link already says. Link instead of explaining.
+- **Cut hedges and filler:** "it appears that", "note that", "in order to", "currently", "basically".
+- **Fragments are fine.** Bullets and tables over prose; one fact per bullet.
+- **Caps:** a task `## Log` or project dated line, one line, 20 words; a task lead paragraph, one sentence; a question task's `## Details`, 5 bullets; a `## Status` section, 8 lines; a run-log report, 150 words beyond the role's record headings and `### Checks`; a chat report, 100 words unless [[= owner =]] asks for more.
+
+## Tags
+
+`tags:` holds kebab-case topics only (`homelab`, `agent-work`); rules in [[schema]].

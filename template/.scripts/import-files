@@ -1,0 +1,260 @@
+#!/usr/bin/env python3
+"""Script the mechanical parts of the vault intake role (File mode) (Agents/roles/role-vault-intake.md).
+
+Never deletes or edits an original; every move is byte for byte, checked by sha256.
+
+  import-files inventory              list every file in _imports/ and _captures/ with size, type,
+                                      sha256, duplicate status (existing filed_path), note vs
+                                      foreign file, and dataviewjs / inline $= code
+  import-files file --src PATH --slug NOTE-SLUG --name NAME [--dry-run]
+                                      move one non-note file into _files/<slug>/ (or
+                                      _attachments/<slug>/ when the store is locked or absent),
+                                      append its manifest row, verify the checksum, print the
+                                      path to embed. A duplicate gets a manifest row pointing at
+                                      the existing filed_path and no move
+  import-files done-capture PATH      move a filed capture note to
+                                      _attachments/_raw/_captures/YYYY-MM-DD/<name>.md.txt
+                                      (subfolders kept; -2, -3 on a name clash)
+  import-files fence-fix PATH         ```dataviewjs -> ```text; strip backticks from inline `$=`
+
+Options: --root DIR (default: the folder holding .scripts/), --today YYYY-MM-DD.
+The store counts as attached when DIR/_files exists and `.scripts/store-image status` exits 0.
+"""
+from __future__ import annotations
+
+import argparse
+import datetime
+import hashlib
+import mimetypes
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+MANIFEST = "_attachments/_raw/manifest.tsv"
+COLUMNS = ["sha256", "size", "filed_path", "original_path", "original_name", "imported"]
+DROPS = ["_imports", "_captures"]
+SKIP = {".gitkeep", ".DS_Store"}
+DVJS = re.compile(r"^(\s{0,3})(```|~~~)\s*dataviewjs\b", re.M)
+INLINE = re.compile(r"`(\$=[^`\n]*)`")
+NOTE_EXT = {".md", ".markdown"}
+
+
+def die(msg: str) -> None:
+    sys.exit(f"import-files: {msg}")
+
+
+def sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def esc(s: str) -> str:
+    return s.replace("\t", "\\t").replace("\n", "\\n")
+
+
+def read_manifest(root: Path) -> dict[str, str]:
+    """sha256 -> first filed_path."""
+    path = root / MANIFEST
+    if not path.is_file():
+        die(f"{MANIFEST} not found under {root}")
+    lines = path.read_text(encoding="utf-8").split("\n")
+    if lines[0].split("\t") != COLUMNS:
+        die(f"{MANIFEST} header is not {' '.join(COLUMNS)}")
+    seen: dict[str, str] = {}
+    for ln in lines[1:]:
+        cols = ln.split("\t")
+        if len(cols) == len(COLUMNS):
+            seen.setdefault(cols[0], cols[2])
+    return seen
+
+
+def append_row(root: Path, row: list[str]) -> None:
+    path = root / MANIFEST
+    data = path.read_bytes()
+    prefix = b"" if data.endswith(b"\n") or not data else b"\n"
+    with path.open("ab") as fh:
+        fh.write(prefix + "\t".join(row).encode("utf-8") + b"\n")
+
+
+def drop_files(root: Path):
+    for d in DROPS:
+        base = root / d
+        if base.is_dir():
+            for p in sorted(base.rglob("*")):
+                if p.is_file() and p.name not in SKIP:
+                    yield p
+
+
+def is_note(p: Path) -> bool:
+    return p.suffix.lower() in NOTE_EXT
+
+
+def code_flags(p: Path) -> list[str]:
+    try:
+        text = p.read_text(encoding="utf-8")
+    except (UnicodeDecodeError, OSError):
+        return []
+    flags = []
+    if DVJS.search(text):
+        flags.append("dataviewjs")
+    if INLINE.search(text):
+        flags.append("inline-$=")
+    return flags
+
+
+def cmd_inventory(root: Path, args) -> int:
+    seen = read_manifest(root)
+    n = 0
+    for p in drop_files(root):
+        n += 1
+        rel = p.relative_to(root).as_posix()
+        digest = sha256(p)
+        kind = "note" if is_note(p) else "foreign"
+        mime = mimetypes.guess_type(p.name)[0] or "unknown"
+        parts = [rel, str(p.stat().st_size), mime, kind, digest]
+        parts.append(f"DUPLICATE of {seen[digest]}" if digest in seen else "new")
+        flags = code_flags(p) if is_note(p) else []
+        if flags:
+            parts.append("CODE: " + ",".join(flags))
+        print("\t".join(parts))
+    print(f"{n} file(s)" if n else "empty: nothing in _imports/ or _captures/")
+    return 0
+
+
+def store_attached(root: Path) -> bool:
+    if not (root / "_files").is_dir():
+        return False
+    script = HERE / "store-image"
+    if not script.exists():
+        return False
+    return subprocess.run([str(script), "status"], capture_output=True).returncode == 0
+
+
+def cmd_file(root: Path, args) -> int:
+    src = Path(args.src)
+    src = src if src.is_absolute() else root / src
+    if not src.is_file():
+        die(f"no such file: {args.src}")
+    try:
+        orig = src.resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        die("source must be inside the vault (_imports/ or _captures/)")
+    if orig.split("/")[0] not in DROPS:
+        die("source must be in _imports/ or _captures/")
+    if is_note(src):
+        die("notes are filed as content, not moved (use done-capture once filed)")
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", args.slug):
+        die("slug must be kebab-case")
+    name = args.name
+    if "/" in name or "\\" in name or name.startswith("."):
+        die("name must be a plain filename")
+    if not Path(name).suffix:
+        name += src.suffix.lower()
+    seen = read_manifest(root)
+    digest, size = sha256(src), src.stat().st_size
+    today = args.today
+    row = [digest, str(size), "", esc(orig), esc(src.name), today]
+    if digest in seen:
+        row[2] = seen[digest]
+        print(f"duplicate of {seen[digest]}: manifest row for {orig}, nothing moved")
+        if not args.dry_run:
+            append_row(root, row)
+            print("row appended; remove or park the drop per organization.md (Importing files, step 6)")
+        return 0
+    folder = "_files" if store_attached(root) else "_attachments"
+    rel = f"{folder}/{args.slug}/{name}"
+    dest = root / rel
+    if dest.exists():
+        die(f"{rel} already exists")
+    row[2] = rel
+    if args.dry_run:
+        print(f"would move {orig} -> {rel}\nwould append: " + "\t".join(row))
+        return 0
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(src), str(dest))  # same bytes; cross-device falls back to copy + remove
+    if sha256(dest) != digest:
+        die(f"checksum mismatch after move; check {rel} and {orig}")
+    append_row(root, row)
+    print(f"filed {orig} -> {rel}\nembed: ![[{rel}]]")
+    return 0
+
+
+def cmd_done_capture(root: Path, args) -> int:
+    src = Path(args.path)
+    src = src if src.is_absolute() else root / src
+    try:
+        sub = src.resolve().relative_to((root / "_captures").resolve())
+    except ValueError:
+        die("path must be inside _captures/")
+    if not src.is_file() or not is_note(src):
+        die("path must be a Markdown capture note")
+    base = root / "_attachments/_raw/_captures" / args.today / sub.parent
+    stem = sub.name  # keep the original name; .md.txt replaces .md
+    stem = stem[: -len(src.suffix)]
+    dest, i = base / f"{stem}.md.txt", 1
+    while dest.exists():
+        i += 1
+        dest = base / f"{stem}-{i}.md.txt"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    digest = sha256(src)
+    shutil.move(str(src), str(dest))
+    if sha256(dest) != digest:
+        die(f"checksum mismatch after move: {dest}")
+    print(f"moved _captures/{sub.as_posix()} -> {dest.relative_to(root).as_posix()}")
+    return 0
+
+
+def cmd_fence_fix(root: Path, args) -> int:
+    p = Path(args.path)
+    p = p if p.is_absolute() else root / p
+    if not p.is_file():
+        die(f"no such file: {args.path}")
+    text = p.read_text(encoding="utf-8")
+    changes = []
+
+    def fence(m):
+        changes.append(f"fence: {m.group(0).strip()} -> {m.group(2)}text")
+        return f"{m.group(1)}{m.group(2)}text"
+
+    def inline(m):
+        changes.append(f"inline: `{m.group(1)}` -> {m.group(1)}")
+        return m.group(1)
+
+    new = INLINE.sub(inline, DVJS.sub(fence, text))
+    if not changes:
+        print("nothing to fix")
+        return 0
+    p.write_text(new, encoding="utf-8")
+    print("\n".join(changes))
+    return 0
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(prog="import-files", description=__doc__.split("\n")[0])
+    ap.add_argument("--root", default=str(HERE.parent))
+    ap.add_argument("--today", default=datetime.date.today().isoformat())
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("inventory")
+    f = sub.add_parser("file")
+    f.add_argument("--src", required=True)
+    f.add_argument("--slug", required=True)
+    f.add_argument("--name", required=True)
+    f.add_argument("--dry-run", action="store_true")
+    d = sub.add_parser("done-capture")
+    d.add_argument("path")
+    x = sub.add_parser("fence-fix")
+    x.add_argument("path")
+    args = ap.parse_args(argv)
+    root = Path(args.root).resolve()
+    fn = {"inventory": cmd_inventory, "file": cmd_file, "done-capture": cmd_done_capture, "fence-fix": cmd_fence_fix}[args.cmd]
+    return fn(root, args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

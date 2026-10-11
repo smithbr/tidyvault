@@ -1,0 +1,45 @@
+---
+title: Glossary
+type: manual
+---
+# Glossary
+
+Part of the [[README]]. One line per term, alphabetical; the linked manual page holds the rules.
+
+| Term | Meaning |
+|---|---|
+| Agent | Any automated tool that reads or edits the vault; same rules as a person. |
+| Archive | `Archive/`: finished or retired Tasks, Projects, Areas, Resources, and People, moved there unrenamed ([[procedures]]). |
+| Area | An ongoing standard with no end date, in `Areas/` ([[gtd]]). |
+| Backlink | A link pointing at a file from elsewhere; Obsidian shows them, nobody lists them by hand. |
+| `blocked_by` | Tasks that must close before this one can be a next action ([[gtd]]). |
+| Capture | Getting something into the vault quickly ([[gtd]], Capture). |
+| Citation | The short source note ending a fact an agent writes, such as `([[kitchen-quote]])` or `(Mail, 2026-10-10, [[log-vault-intake-2026-10-10]])` ([[linking#Citations]]). |
+| Clarify | Deciding what a captured item is and what happens next ([[gtd]], Clarify). |
+| Context | Where or with what an action can be done; values in [[schema]]. |
+| Dangling link | A `[[link]]` whose target doesn't exist; not allowed ([[linking]]). |
+| Dataview | Obsidian plugin that turns frontmatter into live tables; replaces hand-kept rollups ([[body-sections]]). |
+| Destructive change | Anything in the "Do, then report prominently" tier; listed under "Destructive" with its undo ([[agent-protocol]], Permission tiers). |
+| Displaced | What a new commitment pushes down; reported with it ([[agent-protocol]], Displaced). |
+| Frontmatter | The YAML block between `---` lines at the top of any vault file ([[schema]]). |
+| GTD | Getting Things Done: capture, clarify, organize, reflect, engage ([[gtd]]). |
+| Next action | A task with `status: next-action`: a visible physical step [[= owner =]] can do now ([[gtd]]). |
+| Note | Not a type here; see [[naming-and-style]]. |
+| Obsidian Git | Plugin that commits and pushes the vault every 15 minutes ([[external-systems]]). |
+| PARA | Projects, Areas, Resources, Archive: the folder model ([[organization]]). |
+| Project | A multi-action outcome finishable within about a year, in `Projects/` ([[gtd]]). |
+| Queued step | A task with `status: queued`: clarified, but a later project step or blocked ([[gtd]]). |
+| Resource | Anything that isn't a task, project, area, or person, in `Resources/`; `type` says which kind ([[schema]]). |
+| Role | A job defined by a `role-*` manual page in `Agents/roles/`, started when [[= owner =]] says "You are the <role>" or one of its phrases ([[README]], Roles). |
+| Run log | An agent's daily record in `Agents/logs/` ([[agent-protocol]], Run log). |
+[[% if pii %]]
+| Sensitive | Any Task, Project, Area, Resource, or Person with `sensitive: true` ([[sensitive-data]]). |
+[[% endif %]]
+| Slug | The kebab-case filename form of a title ([[naming-and-style]]). |
+| Source page | The `type: document` Resource for an imported file; facts from the file cite it ([[organization]]). |
+| Someday/maybe | Uncommitted ideas, as bullets in an Area's `## Someday/maybe` ([[gtd]]). |
+| Task-resource loop | A task listing the Resources it needs, closed in the same change ([[linking]]). |
+| Tickler | A `(revisit YYYY-MM-DD)` on a Someday/maybe bullet ([[gtd]]). |
+| `vault-lint` | The validator, `python3 .scripts/vault-lint`. Every flag: `--help`; every check: `--list-checks`. Review use (`--review --days N`, 2 for the daily review): [[gtd]] (Queries). |
+| Waiting for | A task with `status: waiting-for`: someone else owes the next move ([[gtd]]). |
+| Weekly review | Get clear, get current, get creative ([[gtd]], Reflect). |

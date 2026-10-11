@@ -1,0 +1,39 @@
+---
+title: Vault backup and restore
+type: reference
+people:
+  - "[[[[= owner_slug =]]]]"
+created: [[= '%Y-%m-%d' | strftime =]]
+---
+# Vault backup and restore
+
+How this vault is backed up and how to get each copy back. Scripts and install steps: `.scripts/restic/README.md`. Only [[= owner =]] runs restores or touches backup secrets ([[external-systems]]).
+
+## Copies
+
+| Copy | Where | Restores |
+|---|---|---|
+| Git history | The vault's `.git/` and its remote (`<git-remote>`) | Any committed version of a note ([[procedures]], Recover a file from history) |
+| restic, vault | Repository `<restic-repository>` (for example `b2:<bucket>:vault`) | Whole-vault snapshots |
+[[% if store %]]
+| restic, file store | Repository `<restic-repository>` (for example `b2:<bucket>:store`) | The file store, `[[= store_path =]]` |
+[[% endif %]]
+
+## Settings
+
+Fill these in once; secrets stay in `~/.config/restic/`, never in the vault.
+
+- **Backup host:** `<host>`
+- **Bucket:** `<bucket>`
+- **Schedule:** `<nightly time and time zone>`
+- **Retention:** `<keep-daily / keep-weekly / keep-monthly>`
+
+## Restore
+
+1. List snapshots: `restic -r <restic-repository> snapshots`.
+2. Restore to a scratch folder, never over the live vault: `restic -r <restic-repository> restore <id> --target /tmp/vault-restore`.
+3. Copy back only the files needed, then run `python3 .scripts/vault-lint`.
+
+## Timeline
+
+- [[= '%Y-%m-%d' | strftime =]] — Backup module installed by tidyvault; settings above still to fill in.

@@ -1,0 +1,212 @@
+#!/usr/bin/env python3
+"""vault-brief — the mechanical part of the vault briefer's daily review, as Markdown.
+
+    vault-brief [--days N] [--limit N] [--snapshot-facts]
+                [--root DIR] [--today YYYY-MM-DD]
+
+Runs `vault-lint --review --json`, reads task files for what the JSON lacks, and
+prints: overdue, due within two days, today's free blocks (Mac only), ranked
+candidate next actions, inbox count, question count (never the questions),
+stale waiting-for, agent tasks waiting 2+ days, and the week ahead by day.
+Fitting actions into free blocks is the agent's job. --snapshot-facts prints
+only the facts the Home snapshot could cite. Never writes files. Stdlib only.
+"""
+
+import argparse
+import datetime
+import json
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+PRIO = {"urgent": 0, "high": 1, "med": 2, "low": 3}
+CLOSED = ("done", "cancelled")
+
+
+def parse_fm(text):
+    """Restricted-YAML frontmatter -> (dict, body). Lists become lists; links lose [[ ]]."""
+    if not text.startswith("---\n"):
+        return {}, text
+    end = text.find("\n---", 4)
+    if end < 0:
+        return {}, text
+    fm, key = {}, None
+    for line in text[4:end].split("\n"):
+        m = re.match(r"^([a-z_]+):\s*(.*)$", line)
+        if m:
+            key, val = m.group(1), m.group(2).strip()
+            fm[key] = clean(val) if val else []
+        elif key and line.strip().startswith("- "):
+            if not isinstance(fm[key], list):
+                fm[key] = [fm[key]]
+            fm[key].append(clean(line.strip()[2:]))
+    return fm, text[end + 4:]
+
+
+def clean(v):
+    v = v.strip().strip('"').strip("'")
+    m = re.match(r"^\[\[([^\]|#]+)", v)
+    return m.group(1) if m else v
+
+
+def as_list(v):
+    return v if isinstance(v, list) else ([v] if v else [])
+
+
+def read_dir(root, folder):
+    out = []
+    for p in sorted((root / folder).rglob("*.md")):
+        fm, body = parse_fm(p.read_text(encoding="utf-8", errors="replace"))
+        out.append((p, fm, body))
+    return out
+
+
+def link(slug):
+    return f"[[{slug}]]"
+
+
+def line(item, extra=()):
+    bits = [item.get("due"), item.get("priority")] + list(extra)
+    bits = [str(b) for b in bits if b]
+    return f"- {link(item['slug'])} — {item['title']}" + (f" ({', '.join(bits)})" if bits else "")
+
+
+def lint_review(root, today, days):
+    cmd = [sys.executable, str(HERE / "vault-lint"), "--root", str(root), "--review", "--json", "--days", str(days)]
+    if today:
+        cmd += ["--today", today]
+    p = subprocess.run(cmd, capture_output=True, text=True)
+    if not p.stdout.strip():
+        sys.exit(f"vault-lint --review failed: {p.stderr.strip()[:300]}")
+    return json.loads(p.stdout)
+
+
+def candidates(r, limit):
+    seen = {}
+    for group in list(r["next_actions_by_project"].values()) + list(r["next_actions_by_context"].values()):
+        for t in group:
+            seen[t["path"]] = t
+    ranked = sorted(seen.values(), key=lambda t: (PRIO.get(t.get("priority"), 4), t.get("due") or "9999",
+                                                  t.get("created") or "9999", t["slug"]))
+    out = []
+    for i, t in enumerate(ranked[:limit], 1):
+        where = t.get("project") or ", ".join(t.get("area") or []) or "?"
+        out.append(f"{i}. {link(t['slug'])} — {t['title']} ({', '.join(x for x in [t.get('priority'), 'due ' + t['due'] if t.get('due') else '', ','.join(t.get('contexts') or ['no contexts']), where] if x)})")
+    if len(ranked) > limit:
+        out.append(f"(+{len(ranked) - limit} more next actions; --limit to show)")
+    return out
+
+
+def questions(tasks):
+    """Open tasks carrying a `**Question**::` line."""
+    return [p.stem for p, fm, body in tasks
+            if fm.get("status") not in CLOSED and "**Question**::" in body]
+
+
+def agent_tasks(tasks, today):
+    out = []
+    for p, fm, _ in tasks:
+        roles = [a for a in as_list(fm.get("assignee")) if a.startswith("role-")]
+        if roles and fm.get("status") not in CLOSED and fm.get("created"):
+            age = (today - datetime.date.fromisoformat(fm["created"][:10])).days
+            if age >= 2:
+                out.append(f"- {link(p.stem)} — {fm.get('title')} ({roles[0]}, {age} days)")
+    return out
+
+
+def week_ahead(r, tasks, projects, today, days):
+    by_day = {}
+    for it in r["due"]:
+        if 3 <= it.get("days_left", -1) <= days:
+            by_day.setdefault(it["due"][:10], []).append(it)
+    out = []
+    for day in sorted(by_day):
+        items = sorted(by_day[day], key=lambda i: (0 if "T" in i["due"] else 1, i["due"], i["slug"]))
+        d = datetime.date.fromisoformat(day)
+        flag = " — crowded, move one earlier" if len(items) >= 5 else ""
+        out.append(f"### {d.strftime('%a %b')} {d.day}{flag}")
+        for i in items:
+            t = i["due"][11:16] + " " if "T" in i["due"] else ""
+            out.append(f"- {t}{link(i['slug'])} — {i['title']} ({i['kind']}, {i['status']}{', ' + i['priority'] if i.get('priority') else ''})")
+    for it in r["due"]:
+        if it["kind"] == "project" and 0 <= it.get("days_left", -1) <= days:
+            opens = [(p.stem, fm) for p, fm, _ in tasks
+                     if fm.get("project") == it["slug"] and fm.get("status") not in CLOSED]
+            out.append(f"### Before {link(it['slug'])} ({it['due'][:10]})")
+            out += [f"- {link(s)} ({fm.get('status')})" + (" — not clarified" if fm.get("status") in ("inbox", "queued") else "")
+                    for s, fm in opens] or ["- no open tasks"]
+    end = today + datetime.timedelta(days=days)
+    for p, fm, body in projects:
+        if fm.get("phase") == "planned":
+            m = re.search(r"^Start when:\s*(.*)$", body, re.M)
+            d = re.search(r"\d{4}-\d{2}-\d{2}", m.group(1)) if m else None
+            if d and today <= datetime.date.fromisoformat(d.group()) <= end:
+                out.append(f"- Starts {d.group()}: {link(p.stem)} — {fm.get('title')}")
+    return out or ["Nothing due in days 3-%d." % days]
+
+
+def snapshot_facts(r, projects, today):
+    out = []
+    for p, fm, _ in projects:
+        if "travel" in as_list(fm.get("area")) and fm.get("phase") not in CLOSED:
+            out.append(f"- Trip/travel: {link(p.stem)} — {fm.get('title')} ({fm.get('phase')}" + (f", due {fm['due']}" if fm.get("due") else "") + ")")
+    for it in r["due"]:
+        if not it.get("overdue") and it.get("days_left", 99) <= r["days"]:
+            out.append(f"- Deadline ({it['kind']}): {link(it['slug'])} — {it['title']} (due {it['due']}" + (f", {it['priority']}" if it.get("priority") else "") + ")")
+    for p, fm, _ in projects:
+        if fm.get("phase") == "in-progress" and fm.get("priority") in ("urgent", "high"):
+            out.append(f"- Project in focus: {link(p.stem)} — {fm.get('title')} ({fm.get('priority')})")
+    return out or ["No facts found."]
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Render the daily review as Markdown (read-only).")
+    ap.add_argument("--days", type=int, default=7)
+    ap.add_argument("--limit", type=int, default=15, help="max candidate next actions (default 15)")
+    ap.add_argument("--snapshot-facts", action="store_true", help="list facts the Home snapshot could cite")
+    ap.add_argument("--root", default=str(HERE.parent))
+    ap.add_argument("--today")
+    a = ap.parse_args()
+    root = Path(a.root).resolve()
+    r = lint_review(root, a.today, a.days)
+    today = datetime.date.fromisoformat(r["today"])
+    projects = read_dir(root, "Projects")
+
+    if a.snapshot_facts:
+        print(f"# Snapshot facts, {r['today']}\n\nPick at most five; every one already lives in its file.\n")
+        print("\n".join(snapshot_facts(r, projects, today)))
+        return
+
+    tasks = read_dir(root, "Tasks")
+    overdue = [i for i in r["due"] if i.get("overdue")]
+    soon = [i for i in r["due"] if not i.get("overdue") and i.get("days_left", 99) <= 2]
+    qn = questions(tasks)
+    inbox = r["inbox"]
+    qslugs = set(qn)
+    stale = [w for w in r["waiting"] if w.get("stale")]
+    P = print
+    P(f"# Daily review, {r['today']}\n")
+    P(f"Lint: {r['lint']['errors']} errors, {r['lint']['warnings']} warnings.\n")
+    P(f"## Overdue ({len(overdue)})\n")
+    P("\n".join(line(i, [i["kind"] if i["kind"] != "task" else None, f"{-i['days_left']}d late"]) for i in overdue) or "None.")
+    P(f"\n## Due within 2 days ({len(soon)})\n")
+    P("\n".join(line(i, [i["kind"] if i["kind"] != "task" else None]) for i in soon) or "None.")
+    P("\n## Candidate next actions (ranked: priority, due, created)\n")
+    P("\n".join(candidates(r, a.limit)) or "None.")
+    P("\n## Inbox\n")
+    P(f"{len(inbox)} inbox tasks; {sum(1 for t in inbox if t['slug'] in qslugs)} are question tasks, "
+      f"{sum(1 for t in inbox if t['slug'] not in qslugs)} to clarify.")
+    P(f"\nWaiting on you: {len(qn)} questions on Home.")
+    P(f"\n## Stale waiting-for, 7+ days ({len(stale)})\n")
+    P("\n".join(f"- {link(w['slug'])} — {w['title']} (on {w.get('waiting_on', '?')}, {w.get('age_days', '?')} days)" for w in stale) or "None.")
+    ag = agent_tasks(tasks, today)
+    P(f"\n## Agent tasks waiting 2+ days ({len(ag)})\n")
+    P("\n".join(ag) or "None.")
+    P("\n## Week ahead (days 3-%d; days 0-2 are above)\n" % a.days)
+    P("\n".join(week_ahead(r, tasks, projects, today, a.days)))
+
+
+if __name__ == "__main__":
+    main()

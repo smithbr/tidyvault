@@ -1,0 +1,72 @@
+# Vault backup (restic)
+
+Nightly, encrypted, off-site snapshots of the vault folder[[%+ if store +%]] and the file store (`[[= store_path =]]`)[[%+ endif +%]], with restic. Any restic backend works (Backblaze B2, S3, SFTP, a local disk). What is backed up where, and the restore runbook: `Resources/vault-backup-and-restore.md`.
+
+## Files
+
+| File | Purpose |
+| --- | --- |
+| `vault-restic` | Any restic command against the vault repository, e.g. `vault-restic snapshots`[[%+ if store +%]]; `--store` first for the file store repository[[%+ endif +%]] |
+| `vault-backup` | Nightly job: back up the vault folder (skipping `_tmp/`, `.trash/`, workspace state), keep 7 daily / 4 weekly / 12 monthly, check a 5% sample |
+[[% if store %]]
+| `store-backup` | Nightly job: the same for the file store; skips while its disk image is locked and warns after 3 days without a backup |
+[[% endif %]]
+| `vault-restore` | Restore a snapshot[[%+ if store +%]] (`--store`: of the file store)[[%+ endif +%]] to a new folder and `git fsck` every repository in it; never writes over the live vault |
+| `install.sh` | Copy the scripts to `~/.local/share/[[= vault =]]-backup/` and schedule them (launchd on macOS, cron on Linux); `--dry-run` previews, `--init` creates the repositories |
+
+## Settings
+
+Nothing personal lives in the vault. Two files outside it, both mode 600 in a mode 700 folder:
+
+- `~/.config/restic/[[= vault =]].env`: written by the first `install.sh` run, with placeholders. Fill in:
+
+  | Key | Value |
+  | --- | --- |
+  | `VAULT_REPOSITORY` | The vault repository, e.g. `b2:<bucket>:vault` |
+[[% if store %]]
+  | `STORE_REPOSITORY` | The file store repository, e.g. `b2:<bucket>:store` |
+[[% endif %]]
+  | Backend credentials | Whatever your backend reads from the environment: `B2_ACCOUNT_ID` and `B2_ACCOUNT_KEY`, or `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`, and so on |
+  | `VAULT_BACKUP_PATH` | The vault folder (pre-filled) |
+  | `BACKUP_HOST` | The snapshot host name (pre-filled; keep it stable, retention is per host) |
+  | `KEEP_DAILY`, `KEEP_WEEKLY`, `KEEP_MONTHLY`, `CHECK_SUBSET` | Optional; defaults 7, 4, 12, `5%` |
+
+- `~/.config/restic/[[= vault =]].password`: the repository password, one line. Keep a copy in your password manager: without it the backups can't be decrypted.
+
+Set `VAULT_RESTIC_CONFIG` to use a folder other than `~/.config/restic`.[[%+ if store +%]] `store-backup` reads `VAULT_FILES` and `VAULT_FILES_IMAGE` like `store-image`.[[%+ endif +%]]
+
+## Install or update
+
+```bash
+.scripts/restic/install.sh --dry-run   # preview
+.scripts/restic/install.sh             # first run writes the settings file; fill it in and add the password
+.scripts/restic/install.sh --init      # create the repositories and schedule the jobs
+```
+
+Rerun `install.sh` after the scripts change. Jobs run nightly at 03:30[[%+ if store +%]] (vault) and 03:45 (file store)[[%+ endif +%]]; launchd labels are `com.[[= vault =]].backup`[[%+ if store +%]] and `com.[[= vault =]].store-backup`[[%+ endif +%]]. On macOS, a vault in `~/Documents`, `~/Desktop`, or iCloud Drive needs Full Disk Access for `restic` (System Settings, Privacy and Security) or the nightly job can't read it.
+
+## Everyday checks
+
+```bash
+~/.local/share/[[= vault =]]-backup/vault-restic snapshots
+tail ~/.local/state/[[= vault =]]-vault-backup.log
+```
+
+## Restore
+
+```bash
+vault-restore                   # latest snapshot -> ~/restore-<timestamp>
+vault-restore 64f0a536          # a specific snapshot
+[[% if store %]]
+vault-restore --store           # the file store
+[[% endif %]]
+```
+
+Copy back only the files you need, then run `python3 .scripts/vault-lint`.
+
+## Rebuild on a new machine
+
+1. Install restic.
+2. Recreate `~/.config/restic/[[= vault =]].env` and `[[= vault =]].password` from your password manager (mode 600, folder mode 700).
+3. From any copy of the vault (or a restore), run `.scripts/restic/install.sh` (no `--init`: the repositories exist).
+4. `vault-restore`, then move the restored vault into place.

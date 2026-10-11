@@ -1,0 +1,20 @@
+# tidyvault config, read by .scripts/vault-lint. Kit-managed; `lint:` is yours to extend.
+modules:
+[[% for m in ['store', 'pii', 'false-facts', 'obsidian', 'backup'] %]]
+[[% if (m | replace('-', '_')) in _copier_answers and _copier_answers[m | replace('-', '_')] %]]
+  - [[= m =]]
+[[% endif %]]
+[[% endfor %]]
+owner: [[= owner =]]
+owner_full: "[[= owner_full =]]"
+owner_slug: [[= owner_slug =]]
+vault: [[= vault =]]
+[[% if store %]]
+store_path: "[[= store_path =]]"
+[[% endif %]]
+lint:
+  proper_nouns: []
+  proper_phrases: []
+  disabled_checks: []
+  read_only_url_patterns: []
+  retired_fields: []

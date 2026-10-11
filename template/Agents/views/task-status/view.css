@@ -1,0 +1,14 @@
+/* Task status view: Agents/views/task-status/view.js */
+.task-status select.dropdown {
+  height: 1.9em;
+  padding: 0 1.6em 0 0.5em;
+  font-size: 0.85em;
+}
+.task-status .task-status-note {
+  margin-left: 0.4em;
+  color: var(--text-muted);
+}
+.task-status-closed {
+  font-size: 0.85em;
+  color: var(--text-muted);
+}

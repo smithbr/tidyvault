@@ -1,0 +1,28 @@
+---
+title: External systems
+type: manual
+---
+# External systems
+
+Part of the [[README]]. Which system owns which kind of truth, and what an agent may do with each. The vault is the source of truth for everything except where a row says otherwise. The rows below ship with the kit; the systems this vault connects to (a money ledger, a task board, a notes app, a mail account) get their own rows in [[local-rules]], each saying what the system owns, what agents may do there, and what they never do.
+
+| System | Owns | Agents may | Agents may not |
+|---|---|---|---|
+| **This vault** | Tasks, projects, areas, reference, people, plans, decisions | Everything in [[agent-protocol]] | See the "Never" tier |
+[[% if pii %]]
+| **The password manager** | [[= owner =]]'s credentials, and the home of the **[[= vault =]] PII register** (a document item), the only place PII values live ([[sensitive-data]]) | Point to it by key; follow a pointer when [[= owner =]] asks | Read or write it (no agent has access), or copy a value from it into the vault, a report, a log, or chat |
+[[% endif %]]
+| **Git** | History of every file: the undo for everything | Read history; restore files; other git commands when needed, with the safeguards in [[agent-protocol#Editing .obsidian and .git]] | Rewrite history |
+| **Obsidian Sync** (if used) | Keeping [[= owner =]]'s devices identical[[%+ if obsidian +%]] ([[obsidian-settings]])[[%+ endif +%]] | Rely on it; expect edits from another device at any moment | Change its settings |
+[[% if backup %]]
+| **restic backups** | Encrypted nightly snapshots of the vault[[%+ if store +%]] and the file store[[%+ endif +%]] | Point [[= owner =]] to [[vault-backup-and-restore]]; [[role-vault-ops]] checks that snapshots are current | Run restores or touch backup secrets |
+[[% endif %]]
+| **Email, messages, calendar** | Communication | Read, when [[= owner =]] asks, and file durable facts in the vault | Send, reply, accept, or invite without [[= owner =]]'s approval (stop-and-ask 2), except a [[agent-protocol#Standing approvals|standing approval]] in [[local-rules]] |
+| **Read-only sources** | Systems the vault was imported from, or that only ever feed it | Read them to recover something the import missed, then file that in the vault | Write, comment, or reorganize anything there. `lint.read_only_url_patterns` in `.tidyvault.yml` lists their URLs, so `vault-lint` flags a link back to one in frontmatter |
+[[% if obsidian %]]
+| **Obsidian plugins** | Views and tooling, never facts ([[obsidian-settings]]) | Write Dataview DQL queries in vault files; change `.obsidian/` settings ([[obsidian-settings#Editing .obsidian and .git]]) | See the same section |
+[[% endif %]]
+
+## How the copies fit together
+
+The working vault is the one Obsidian opens. Obsidian Sync, if used, copies it to [[= owner =]]'s other devices, and File recovery and Sync version history can restore a note. Git history[[%+ if backup +%]], the off-site restic backup[[%+ if store +%]], and the file store's backup[[%+ endif +%]], with how to recover each: [[vault-backup-and-restore]][[%+ else +%]] is the undo for every note: "Recover a file from history" in [[procedures]][[%+ endif +%]].

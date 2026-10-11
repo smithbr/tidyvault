@@ -1,0 +1,8 @@
+owner: Robin
+owner_full: "Robin Vale"
+owner_slug: robin-vale
+vault: fix
+lint:
+  retired_fields:
+    - old_id
+    - old_db

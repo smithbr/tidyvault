@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Run any restic command against this vault's backup repository.
+#   vault-restic snapshots            the vault repository
+[[% if store %]]
+#   vault-restic --store snapshots    the file store repository
+[[% endif %]]
+# Settings and backend credentials: ~/.config/restic/[[= vault =]].env; the
+# repository password: ~/.config/restic/[[= vault =]].password. Neither is ever
+# in the vault. Both are described in .scripts/restic/README.md.
+set -euo pipefail
+
+# launchd and cron run with a minimal PATH; add Homebrew's.
+PATH="/opt/homebrew/bin:/usr/local/bin:/home/linuxbrew/.linuxbrew/bin:${PATH}"
+
+cfg="${VAULT_RESTIC_CONFIG:-${HOME}/.config/restic}"
+env_file="${cfg}/[[= vault =]].env"
+if [[ ! -r "${env_file}" ]]; then
+    printf '%s: missing %s (run install.sh to create it)\n' "${0##*/}" "${env_file}" >&2
+    exit 1
+fi
+set -a
+# shellcheck source=/dev/null
+. "${env_file}"
+set +a
+
+repo_var=VAULT_REPOSITORY
+[[% if store %]]
+if [[ "${1:-}" == "--store" ]]; then
+    repo_var=STORE_REPOSITORY
+    shift
+fi
+[[% endif %]]
+if [[ -z "${!repo_var:-}" ]]; then
+    printf '%s: set %s in %s\n' "${0##*/}" "${repo_var}" "${env_file}" >&2
+    exit 1
+fi
+export RESTIC_REPOSITORY="${!repo_var}"
+export RESTIC_PASSWORD_FILE="${cfg}/[[= vault =]].password"
+
+exec restic "$@"

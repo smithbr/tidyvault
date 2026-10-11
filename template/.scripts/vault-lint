@@ -1,0 +1,3286 @@
+#!/usr/bin/env python3
+"""vault-lint — validator and GTD review for a tidyvault Obsidian vault.
+
+Enforces Agents/schema.md (the frontmatter contract) plus the structural,
+GTD, linking, attachment and body-section rules in Agents/. The rule-by-rule
+coverage matrix is in .scripts/README.md. Python 3 standard library only.
+
+USAGE
+    python3 .scripts/vault-lint [--fix] [--json] [--only CHECK[,CHECK]]
+                                [--quiet] [--root DIR] [--today YYYY-MM-DD]
+                                [paths...]
+    python3 .scripts/vault-lint --review [--json] [--days N] [--no-git]
+                                [--root DIR] [--today YYYY-MM-DD]
+    python3 .scripts/vault-lint [--archive-closed] [--promote] [--dry-run]
+                                [paths...]
+
+    paths      Limit *reported* findings to these files/folders (relative to
+               the vault root or absolute). The whole vault is always indexed
+               so links and relations resolve. Dot-folders, _tmp/ (agent
+               scratch), _imports/ (files awaiting import), and _captures/ (notes
+               awaiting filing) are never indexed.
+    --fix      Apply safe mechanical frontmatter rewrites (see FIXES below),
+               print what changed, then lint again and report what remains.
+    --json     Emit a JSON list of {check, severity, path, line, message,
+               fixable} (with --review: one JSON object of review sections).
+    --only     Run only the named checks (comma-separated ids). `--only manifest`
+               also re-hashes every file the manifest names (slow; sizes are
+               checked on every run).
+    --quiet    Human output shows errors only (summary still counts all).
+    --root     Vault root (default: the folder containing .scripts/).
+    --today    Override "today" for date rules and the review.
+    --review   Print the GTD daily/weekly review (Agents/gtd.md) as Markdown
+               instead of linting: due soon, next actions by project and
+               context, inbox, waiting-for ages, next-action rule breaches,
+               blocked tasks to promote, stale projects, closed-not-archived,
+               Someday/maybe revisits. Always exits 0.
+    --days     Due-soon window for --review (default 7).
+    --no-git   --review: use file mtimes instead of git history for staleness.
+
+    Exit status: 0 when no errors are reported, 1 when any error is reported,
+    2 on usage problems. Warnings and info never fail the run.
+
+CHECKS (stable ids; --list-checks describes them)
+    structure, file-format, frontmatter-present, frontmatter-syntax, filename,
+    unique-names, title, schema, links, relations, waiting-on, tasks, projects, archive,
+    attachments, manifest, anatomy, dataview, dataviewjs, dates, sensitive, format, orphans, facts, source-urls
+
+CONFIG (.tidyvault.yml at the vault root, written by Copier)
+    owner, owner_full, owner_slug, vault, store_path, store_image, and the
+    modules list (store, pii, false-facts, obsidian, backup). A check whose
+    module is off is skipped and listed as off by --list-checks. lint.proper_nouns
+    and lint.proper_phrases extend the sentence-case allowlist; lint.disabled_checks
+    turns checks off; lint.read_only_url_patterns are regexes for URLs of systems
+    agents must never write to (error in frontmatter, info in body). Without the
+    file, every module is on and the owner is "the owner".
+
+FIXES (--fix; idempotent, atomic writes)
+    reorder keys to schema order · quote bare wikilinks · inline lists to
+    block lists · normalise list indent to two spaces · unquote ISO dates in
+    date fields · delete empty keys, empty list items and blank lines ·
+    delete redundant retired fields (agent_review, edited, archive: false,
+    and lint.retired_fields) · strip a UTF-8 byte-order mark. CRLF files keep
+    CRLF. A file whose frontmatter has anything outside the restricted subset,
+    that isn't valid UTF-8, is a symlink, or changed on disk mid-run is left
+    untouched.
+    Body formatting (the `format` check; LF notes, not templates): trailing
+    spaces, `*`/`+`/`•` bullets to `-`, one blank line around headings, code
+    fences, tables and blockquotes, no runs of blank lines, no blank line
+    between the frontmatter and the H1, one newline at end of file. Fenced code is never
+    touched; wording never changes.
+
+ARCHIVE AND PROMOTE (--archive-closed, --promote; --dry-run shows the plan)
+    --archive-closed  Agents/procedures.md, "Archive a file", for each done or
+                      cancelled task still in Tasks/: set `completed` (today,
+                      when missing), add `archived: true` and `archived_from:
+                      Tasks`, move it to Archive/ under the same filename.
+                      Closed projects are listed, never moved: archiving one
+                      sorts its tasks and Resources, which takes judgment.
+    --promote         Agents/gtd.md, "Promote on close": each not-started or
+                      in-progress project with no next action gets its best
+                      queued task (all blockers closed; highest priority, then
+                      earliest due, then oldest created) set to next-action.
+                      `contexts` are never guessed: a promoted task without
+                      them is reported. Projects with no ready task are listed.
+    Both take paths to limit what they touch, run archive first when given
+    together, then --fix the files they wrote, and never overwrite: a file
+    that changed mid-run, or a taken name in Archive/, is skipped and reported.
+
+ADDING A CHECK
+    1. Write `def check_<name>(v: Vault) -> Iterator[Finding]` that yields
+       Finding(check=<id>, severity=ERROR|WARNING|INFO, path, line, message).
+    2. Decorate it with @check("<id>", "one-line description").
+    3. Add good + bad fixtures under .scripts/tests/fixtures, an expectation
+       in .scripts/tests/run.py, and a row in the README coverage matrix.
+    Schema facts (fields, enums, order) live in the SCHEMA tables below —
+    change those, not the checks, when Agents/schema.md changes.
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import json
+import os
+import re
+import sys
+import tempfile
+import unicodedata
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Callable, Iterable, Iterator, Optional
+
+ERROR, WARNING, INFO = "error", "warning", "info"
+SEVERITY_RANK = {ERROR: 0, WARNING: 1, INFO: 2}
+
+# --------------------------------------------------------------------------
+# Vault layout
+# --------------------------------------------------------------------------
+
+CONTENT_DIRS = ["Tasks", "Projects", "Areas", "Resources", "People", "Archive", "Agents"]
+ATTACH_DIR = "_attachments"
+RAW_DIR = ATTACH_DIR + "/_raw"  # untouched source files, original names and layout: exempt from naming/embedding rules
+SCRATCH_DIR = "_tmp"  # agent scratch space: git-ignored, skipped entirely like dot-folders
+IMPORTS_DIR = "_imports"  # drop folder for foreign files (anyone may add): skipped entirely like _tmp/
+CAPTURES_DIR = "_captures"  # capture notes awaiting filing (anyone may add): skipped entirely like _tmp/
+STORE_PRIVATE = "_private"  # inside the store: PII waiting for the password manager, skipped by every check
+STORE_DIR = "_files"  # module store: symlink to the file store (store_path in .tidyvault.yml), git-ignored: indexed through the link, never walked as a folder
+CONFIG_FILE = ".tidyvault.yml"
+MODULES = ["store", "pii", "false-facts", "obsidian", "backup"]
+CHECK_MODULES = {"attachments": "store", "manifest": "store", "pii": "pii", "sensitive": "pii",
+                 "facts": "false-facts"}  # check id -> module it needs
+
+
+def parse_config(text: str) -> dict:
+    """The restricted YAML of .tidyvault.yml: `key: scalar`, `key:` + `  - item` lists, `key: []`,
+    and one nested map level (`lint:` + indented keys). Scalars are plain or double-quoted."""
+    def scalar(raw):
+        raw = raw.strip()
+        if raw == "[]":
+            return []
+        if len(raw) >= 2 and raw[0] == raw[-1] == '"':
+            return raw[1:-1].replace('\\"', '"').replace("\\\\", "\\")
+        return raw
+    out: dict = {}
+    parent = None   # top-level key holding a nested map
+    target = None   # (dict, key) the next "- item" appends to
+    for n, line in enumerate(text.split("\n"), 1):
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        body = line.strip()
+        if body.startswith("- "):
+            if target is None:
+                raise ValueError(f"line {n}: list item without a key")
+            d, k = target
+            if not isinstance(d.get(k), list):
+                d[k] = []
+            d[k].append(scalar(body[2:]))
+            continue
+        key, sep, rest = body.partition(":")
+        if not sep or not re.fullmatch(r"[A-Za-z_][\w-]*", key):
+            raise ValueError(f"line {n}: expected 'key: value'")
+        if indent == 0:
+            parent = None
+            d = out
+        elif parent is not None and indent == 2:
+            d = out[parent]
+        else:
+            raise ValueError(f"line {n}: unexpected indent")
+        if rest.strip():
+            d[key] = scalar(rest)
+            target = None
+        else:
+            d[key] = None  # a list or (top level only) a nested map, decided by the next line
+            target = (d, key)
+            if indent == 0:
+                parent = key
+                out[key] = {}
+                target = (out, key)
+    for k, val in list(out.items()):
+        if val == {}:
+            out[k] = None
+    return out
+
+
+def load_config(root) -> dict:
+    """Read .tidyvault.yml; defaults when it's missing: every module on, owner "the owner"."""
+    root = Path(root)
+    cfg: dict = {}
+    path = root / CONFIG_FILE
+    if path.is_file():
+        try:
+            cfg = parse_config(path.read_text(encoding="utf-8"))
+        except (ValueError, UnicodeDecodeError, OSError) as e:
+            print(f"vault-lint: {CONFIG_FILE}: {e}; using defaults", file=sys.stderr)
+            cfg = {}
+    lint = cfg.get("lint") if isinstance(cfg.get("lint"), dict) else {}
+    as_list = lambda x: [str(i) for i in x] if isinstance(x, list) else ([] if not x else [str(x)])
+    vault = str(cfg.get("vault") or root.name)
+    modules = cfg.get("modules")
+    store_path = os.path.expanduser(str(cfg.get("store_path") or f"~/{vault}-files"))
+    return {
+        "owner": str(cfg.get("owner") or "the owner"),
+        "owner_full": str(cfg.get("owner_full") or cfg.get("owner") or ""),  # "" without a config
+        "owner_slug": str(cfg.get("owner_slug") or ""),
+        "vault": vault,
+        "modules": set(as_list(modules)) if modules is not None or "modules" in cfg else set(MODULES),
+        "store_path": store_path,
+        "store_image": os.path.expanduser(os.environ.get("VAULT_FILES_IMAGE")
+                                          or str(cfg.get("store_image") or store_path + ".sparsebundle")),
+        "proper_nouns": as_list(lint.get("proper_nouns")),
+        "proper_phrases": as_list(lint.get("proper_phrases")),
+        "disabled_checks": set(as_list(lint.get("disabled_checks"))),
+        "read_only_url_patterns": as_list(lint.get("read_only_url_patterns")),
+        "retired_fields": as_list(lint.get("retired_fields")),
+    }
+
+
+def check_off(cid: str, cfg: dict) -> Optional[str]:
+    """Why a check is off in this vault, or None when it runs."""
+    mod = CHECK_MODULES.get(cid)
+    if mod and mod not in cfg["modules"]:
+        return f"module {mod} is off"
+    if cid in cfg["disabled_checks"]:
+        return "lint.disabled_checks"
+    return None
+
+
+def store_state(root, image: str) -> str:
+    """'attached', 'locked', or 'absent'. The store is an encrypted disk image mounted at the
+    symlink's target (.scripts/store-image). Where the image exists, only a mounted target counts
+    (a different device from its parent); the bare mount point is locked, and anything in it sits
+    outside the encryption. Without an image, a plain folder is the store, as before."""
+    link = Path(root) / STORE_DIR
+    if not (link.is_symlink() and link.is_dir()):  # Sync can leave an empty real folder
+        return "absent"
+    if not os.path.exists(image):
+        return "attached"
+    target = link.resolve()
+    return "attached" if target.stat().st_dev != target.parent.stat().st_dev else "locked"
+
+
+def belongs_in_store(rel: str, size: int) -> bool:
+    """A filed attachment that lives in the file store: every file but a note, whatever its size."""
+    return not rel.lower().endswith(".md")
+SKIPPED_DIRS = {SCRATCH_DIR, IMPORTS_DIR, CAPTURES_DIR, STORE_DIR}
+ALLOWED_DIRS = set(CONTENT_DIRS) | {ATTACH_DIR} | SKIPPED_DIRS
+ROOT_FILES = {"Home.md", "AGENTS.md", "llms.txt"}
+AGENT_FILES = {"AGENTS.md"}  # plain doc, not a note
+FILENAME_EXCEPTIONS = {"Agents/README.md", "Home.md"}
+TEMPLATE_DIR = "Agents/templates"  # template-*.md: Templater source
+ROLE_DIR = "Agents/roles"  # role-*.md: agent job descriptions
+LOCAL_ROLE_DIR = "Agents/local/roles"  # role-<name>-local.md: a vault's own modes for a kit role; the kit never touches Agents/local/
+LOG_DIR = "Agents/logs"  # log-*.md: agent run logs, one per agent per day
+IGNORED_NAMES = {".DS_Store"}
+
+# --------------------------------------------------------------------------
+# Schema (mirror of Agents/schema.md)
+# --------------------------------------------------------------------------
+
+PRIORITY = {"low", "med", "high", "urgent"}
+TASK_STATUS = ["inbox", "queued", "next-action", "waiting-for", "done", "cancelled"]
+OPEN_TASK = {"inbox", "queued", "next-action", "waiting-for"}
+CLOSED = {"done", "cancelled"}
+PROJECT_PHASE = ["planned", "not-started", "in-progress", "waiting", "done", "cancelled"]
+CONTEXTS = {"calls", "computer", "errands", "home", "phone", "agenda", "anywhere"}
+RESOURCE_TYPES = {"reference", "list", "document", "analysis", "log", "organization"}
+RELATIONSHIPS = {"self", "family", "partner", "friend", "professional", "other"}
+HEALTH = {"on-track", "at-risk", "blocked"}  # Agents/body-sections.md, Project status
+ARCHIVED_FROM = {"Tasks", "Projects", "Areas", "Resources", "People"}
+
+# Field type spec: (kind, arg). Kinds:
+#   text, text-list, date, link, links, tags, enum, enum-list, true, url
+T = lambda kind, arg=None: (kind, arg)  # noqa: E731
+
+COMMON_HEAD = [("title", T("text"))]
+COMMON_TAIL = [
+    ("aliases", T("text-list")),
+    ("tags", T("tags")),
+    ("sensitive", T("true")),
+    ("public_places", T("true")),  # its addresses and phone numbers are businesses or public places (pii)
+    ("created", T("date")),
+]
+
+FOLDER_FIELDS = {
+    "Tasks": [
+        ("status", T("enum", set(TASK_STATUS))),
+        ("priority", T("enum", PRIORITY)),
+        ("due", T("date")),
+        ("project", T("link")),
+        ("area", T("links")),
+        ("parent", T("link")),
+        ("contexts", T("enum-list", CONTEXTS)),
+        ("assignee", T("links")),
+        ("waiting_on", T("link")),
+        ("waiting_since", T("date")),
+        ("people", T("links")),
+        ("resources", T("links")),
+        ("blocked_by", T("links")),
+        ("completed", T("date")),
+    ],
+    "Projects": [
+        ("phase", T("enum", set(PROJECT_PHASE))),
+        ("health", T("enum", HEALTH)),
+        ("last_sweep", T("date")),
+        ("priority", T("enum", PRIORITY)),
+        ("due", T("date")),
+        ("area", T("links")),
+        ("people", T("links")),
+        ("resources", T("links")),
+        ("completed", T("date")),
+    ],
+    "Areas": [
+        ("people", T("links")),
+        ("resources", T("links")),
+    ],
+    "Resources": [
+        ("type", T("enum", RESOURCE_TYPES)),
+        ("area", T("links")),
+        ("projects", T("links")),
+        ("people", T("links")),
+        ("date", T("date")),
+        ("url", T("url")),
+        ("favorite", T("true")),
+    ],
+    "People": [
+        ("relationship", T("enum", RELATIONSHIPS)),
+        ("context", T("text")),
+        ("location", T("text")),
+        ("area", T("links")),
+        ("projects", T("links")),
+        ("resources", T("links")),
+    ],
+}
+REQUIRED = {
+    "Tasks": ["title", "status"],
+    "Projects": ["title", "phase", "area"],
+    "Areas": ["title"],
+    "Resources": ["title", "type"],
+    "People": ["title", "relationship"],
+    "Archive": ["title", "archived", "archived_from"],
+    "Agents": ["title", "type"],
+    "Home": ["title"],
+}
+ARCHIVE_EXTRA = [("archived", T("true")), ("archived_from", T("enum", ARCHIVED_FROM))]
+MANUAL_FIELDS = [("title", T("text")), ("type", T("enum", {"manual", "template"}))]
+AGENT_LOG_FIELDS = [("title", T("text")), ("type", T("enum", {"log"})), ("date", T("date")),
+                    ("sensitive", T("true"))]
+HOME_FIELDS = [("title", T("text"))]
+
+# Fields older vaults carried; an error in the schema check, and --fix deletes the redundant ones.
+# A vault extends both lists with lint.retired_fields in .tidyvault.yml (Vault.__init__).
+RETIRED = ["archive", "agent_review", "edited", "description",
+           "tasks", "blocking", "sub-item", "parent_item", "categories"]
+RETIRED_REDUNDANT = {"agent_review", "edited"}  # + archive: false
+
+DATE_FIELDS = {"created", "due", "date", "completed", "waiting_since", "last_sweep"}
+
+# Relation targets: field -> folders the link must land in. Archive targets are
+# accepted when the note's origin (archived_from, or inferred) matches or is unknown.
+RELATION_TARGETS = {
+    "project": {"Projects"},
+    "projects": {"Projects"},
+    "area": {"Areas"},
+    "people": {"People"},
+    "assignee": {"People", "roles"},  # "roles": an agent's role page, Agents/roles/role-*.md
+    "waiting_on": {"People", "Resources", "roles"},  # Resources only with type: organization
+    "resources": {"Resources"},
+    "blocked_by": {"Tasks"},
+    "parent": {"Tasks"},
+}
+
+
+def _merge_archive_fields() -> list:
+    """Union of all folder schemas in a stable order (Tasks first)."""
+    seen, out = set(), []
+    for folder in ["Tasks", "Projects", "Areas", "Resources", "People"]:
+        for name, spec in FOLDER_FIELDS[folder]:
+            if name not in seen:
+                seen.add(name)
+                out.append((name, spec))
+    return out
+
+
+def schema_for(note: "Note") -> list:
+    """Ordered [(field, spec)] allowed for `note`."""
+    folder, fm = note.folder, note.fm
+    if folder == "Agents":
+        return AGENT_LOG_FIELDS if fm is not None and fm.scalar("type") == "log" else MANUAL_FIELDS
+    if folder == "Home":
+        return HOME_FIELDS
+    if folder == "Archive":
+        origin = fm.scalar("archived_from") if fm else None
+        if origin in FOLDER_FIELDS:
+            # Agents/schema.md: the note keeps its original folder's fields only.
+            body = FOLDER_FIELDS[origin]
+        else:  # archived_from missing or wrong (reported): accept any folder's fields
+            body = _merge_archive_fields()
+        return COMMON_HEAD + body + ARCHIVE_EXTRA + COMMON_TAIL
+    return COMMON_HEAD + FOLDER_FIELDS[folder] + COMMON_TAIL
+
+
+# --------------------------------------------------------------------------
+# Findings and check registry
+# --------------------------------------------------------------------------
+
+@dataclass
+class Finding:
+    check: str
+    severity: str
+    path: str
+    line: int
+    message: str
+    fixable: bool = False
+
+    def as_dict(self):
+        return {"check": self.check, "severity": self.severity, "path": self.path,
+                "line": self.line, "message": self.message, "fixable": self.fixable}
+
+
+CHECKS: dict = {}  # id -> (description, fn)
+
+
+def check(cid: str, description: str):
+    def deco(fn: Callable[["Vault"], Iterable[Finding]]):
+        CHECKS[cid] = (description, fn)
+        return fn
+    return deco
+
+
+# --------------------------------------------------------------------------
+# Restricted YAML subset parser
+# --------------------------------------------------------------------------
+
+WIKILINK_FULL = re.compile(r"^\[\[[^\[\]\n]+\]\]$")
+WIKILINK_ANY = re.compile(r"(!?)\[\[([^\[\]\n]+?)\]\]")
+ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2})?$")
+KEY_LINE = re.compile(r"^([^\s:#\-][^:]*?):(?:[ ]+(.*?))?\s*$")
+ITEM_LINE = re.compile(r"^( *)-(?:[ ]+(.*?))?\s*$")
+SNAKE = re.compile(r"^[a-z][a-z0-9_]*$")
+BOOLISH = {"yes", "no", "on", "off", "y", "n", "true", "false"}
+NULLISH = {"null", "~", "Null", "NULL"}
+SPECIAL_START = set("[{\"'#&*!|>%@`")
+
+
+@dataclass
+class Value:
+    raw: str          # as written after "key: " / "- "
+    text: str         # the string value (quotes removed)
+    style: str        # plain | double | single
+    line: int
+
+
+@dataclass
+class Entry:
+    key: str
+    line: int
+    kind: str                     # scalar | list | inline | empty
+    value: Optional[Value] = None
+    items: list = field(default_factory=list)  # list[Value]
+
+
+@dataclass
+class Issue:
+    severity: str
+    line: int
+    message: str
+    fix: Optional[str] = None     # fix tag when mechanically fixable
+
+
+@dataclass
+class Frontmatter:
+    entries: list
+    issues: list                  # list[Issue]
+    end_line: int                 # 1-based line of closing ---
+    body_offset: int              # char offset where the body starts
+    unsafe: bool = False          # contains constructs --fix must not touch
+
+    def get(self, key) -> Optional[Entry]:
+        for e in self.entries:
+            if e.key == key:
+                return e
+        return None
+
+    def scalar(self, key) -> Optional[str]:
+        e = self.get(key)
+        return e.value.text if e and e.kind == "scalar" and e.value else None
+
+    def values(self, key) -> list:
+        """All Values for a key regardless of shape."""
+        e = self.get(key)
+        if not e:
+            return []
+        if e.kind == "scalar" and e.value:
+            return [e.value]
+        return list(e.items)
+
+    def texts(self, key) -> list:
+        return [v.text for v in self.values(key)]
+
+
+def _unescape_double(s: str) -> str:
+    return re.sub(r'\\(.)', lambda m: {"n": "\n", "t": "\t"}.get(m.group(1), m.group(1)), s)
+
+
+def parse_value(raw: str, line: int, issues: list, in_list: bool) -> tuple:
+    """Parse one scalar. Returns (Value|None, unsafe:boolean). Appends issues."""
+    if raw == "":
+        return None, False
+    if raw[0] == '"':
+        m = re.match(r'^"((?:[^"\\]|\\.)*)"$', raw)
+        if not m:
+            issues.append(Issue(ERROR, line, f"malformed double-quoted value: {raw}"))
+            return Value(raw, raw, "plain", line), True
+        return Value(raw, _unescape_double(m.group(1)), "double", line), False
+    if raw[0] == "'":
+        m = re.match(r"^'((?:[^']|'')*)'$", raw)
+        issues.append(Issue(ERROR, line, "single-quoted value; use double quotes"))
+        if not m:
+            return Value(raw, raw, "plain", line), True
+        return Value(raw, m.group(1).replace("''", "'"), "single", line), False
+    if WIKILINK_FULL.match(raw):
+        issues.append(Issue(ERROR, line, f"unquoted wikilink {raw}; write \"{raw}\"", "quote-link"))
+        return Value(raw, raw, "plain", line), False
+    if raw[0] == "[":
+        if in_list:
+            issues.append(Issue(ERROR, line, "nested inline list inside a block list"))
+            return Value(raw, raw, "plain", line), True
+        return None, False  # caller handles inline list
+    if raw[0] in "|>":
+        issues.append(Issue(ERROR, line, "block scalar (| or >) is outside the frontmatter subset"))
+        return Value(raw, raw, "plain", line), True
+    if raw[0] == "{":
+        issues.append(Issue(ERROR, line, "flow mapping {…} is outside the frontmatter subset"))
+        return Value(raw, raw, "plain", line), True
+    if raw[0] == "#":
+        issues.append(Issue(ERROR, line, "comment where a value belongs"))
+        return None, True
+    if raw[0] in SPECIAL_START or raw.startswith("- ") or raw == "-":
+        issues.append(Issue(ERROR, line, f"value starts with a special character; double-quote it: {raw}"))
+        return Value(raw, raw, "plain", line), True
+    if raw in NULLISH:
+        issues.append(Issue(ERROR, line, "null value; delete the key", "drop-empty"))
+        return None, False
+    if ": " in raw or raw.endswith(":"):
+        issues.append(Issue(ERROR, line, "value contains ': '; double-quote it"))
+    if " #" in raw:
+        issues.append(Issue(ERROR, line, "value contains ' #' (YAML comment); double-quote it"))
+    if raw.lower() in BOOLISH and raw not in ("true", "false"):
+        issues.append(Issue(ERROR, line, f"ambiguous boolean '{raw}'; use true/false or quote it"))
+    return Value(raw, raw, "plain", line), False
+
+
+def split_inline_list(raw: str) -> Optional[list]:
+    """Split '[a, "b", [[c]]]' into raw item strings, or None if not simple."""
+    inner = raw.strip()
+    if not (inner.startswith("[") and inner.endswith("]")):
+        return None
+    inner = inner[1:-1].strip()
+    if not inner:
+        return []
+    items, buf, i, depth, quote = [], "", 0, 0, None
+    while i < len(inner):
+        c = inner[i]
+        if quote:
+            buf += c
+            if c == "\\" and quote == '"' and i + 1 < len(inner):
+                buf += inner[i + 1]
+                i += 1
+            elif c == quote:
+                quote = None
+        elif c in "\"'":
+            quote = c
+            buf += c
+        elif c == "[":
+            depth += 1
+            buf += c
+        elif c == "]":
+            depth -= 1
+            buf += c
+        elif c == "," and depth == 0:
+            items.append(buf.strip())
+            buf = ""
+        elif c == "{":
+            return None
+        else:
+            buf += c
+        i += 1
+    if quote or depth:
+        return None
+    items.append(buf.strip())
+    return items
+
+
+def parse_frontmatter(text: str) -> tuple:
+    """Return (Frontmatter|None, error_message|None)."""
+    if not (text.startswith("---\n") or text.startswith("---\r\n") or text == "---"):
+        return None, "no frontmatter: line 1 must be '---'"
+    lines = text.split("\n")
+    end = None
+    for i in range(1, len(lines)):
+        if lines[i].rstrip("\r") == "---":
+            end = i
+            break
+    if end is None:
+        return None, "frontmatter never closed with '---'"
+    body_offset = sum(len(l) + 1 for l in lines[: end + 1])
+    issues: list = []
+    entries: list = []
+    unsafe = False
+    current: Optional[Entry] = None
+    seen = {}
+    for idx in range(1, end):
+        ln = idx + 1
+        line = lines[idx]
+        if line.endswith("\r"):
+            issues.append(Issue(ERROR, ln, "CRLF line ending in frontmatter"))
+            unsafe = True
+            line = line[:-1]
+        if "\t" in line:
+            issues.append(Issue(ERROR, ln, "tab character in frontmatter"))
+            unsafe = True
+        if line.strip() == "":
+            issues.append(Issue(ERROR, ln, "blank line inside frontmatter", "drop-blank"))
+            continue
+        if line.lstrip().startswith("#"):
+            issues.append(Issue(ERROR, ln, "comment line in frontmatter"))
+            unsafe = True
+            continue
+        mi = ITEM_LINE.match(line)
+        if mi:
+            if current is None or current.kind not in ("list", "empty"):
+                issues.append(Issue(ERROR, ln, "list item without a parent key"))
+                unsafe = True
+                continue
+            current.kind = "list"
+            if len(mi.group(1)) != 2:
+                issues.append(Issue(ERROR, ln, "list items use exactly two-space indent: '  - item'", "indent"))
+            raw = mi.group(2) or ""
+            if raw == "":
+                issues.append(Issue(ERROR, ln, f"empty list item under '{current.key}'", "drop-empty-item"))
+                continue
+            val, bad = parse_value(raw, ln, issues, in_list=True)
+            unsafe |= bad
+            if val is not None:
+                current.items.append(val)
+            continue
+        mk = KEY_LINE.match(line)
+        if mk and not line.startswith(" "):
+            key, raw = mk.group(1), (mk.group(2) or "")
+            if not SNAKE.match(key) and key not in RETIRED:
+                issues.append(Issue(ERROR, ln, f"key '{key}' is not snake_case"))
+            if key in seen:
+                issues.append(Issue(ERROR, ln, f"duplicate key '{key}' (first on line {seen[key]})"))
+                unsafe = True
+            seen.setdefault(key, ln)
+            entry = Entry(key, ln, "empty")
+            if raw:
+                inline = split_inline_list(raw) if raw.startswith("[") and not WIKILINK_FULL.match(raw) else None
+                if raw.startswith("[") and not WIKILINK_FULL.match(raw):
+                    if inline is None:
+                        issues.append(Issue(ERROR, ln, f"unparseable inline list: {raw}"))
+                        unsafe = True
+                    else:
+                        entry.kind = "inline"
+                        issues.append(Issue(ERROR, ln, f"inline list for '{key}'; use a block list", "block-list"))
+                        for item in inline:
+                            if item == "":
+                                continue
+                            v, bad = parse_value(item, ln, issues, in_list=True)
+                            unsafe |= bad
+                            if v is not None:
+                                entry.items.append(v)
+                else:
+                    val, bad = parse_value(raw, ln, issues, in_list=False)
+                    unsafe |= bad
+                    if val is None:
+                        entry.kind = "empty"
+                    else:
+                        entry.kind = "scalar"
+                        entry.value = val
+                        if val.style == "double" and val.text == "":
+                            entry.kind, entry.value = "empty", None
+            entries.append(entry)
+            current = entry
+            continue
+        issues.append(Issue(ERROR, ln, f"line outside the frontmatter subset: {line.strip()[:60]}"))
+        unsafe = True
+    for e in entries:
+        if e.kind == "empty" or (e.kind in ("list", "inline") and not e.items):
+            if e.kind == "empty" or e.kind == "inline":
+                e.kind = "empty"
+            issues.append(Issue(ERROR, e.line, f"empty value for '{e.key}'; delete the key", "drop-empty"))
+    return Frontmatter(entries, issues, end + 1, body_offset, unsafe), None
+
+
+# --------------------------------------------------------------------------
+# Notes and vault index
+# --------------------------------------------------------------------------
+
+MAX_NOTE_BYTES = 2_000_000  # bigger notes are indexed but not content-checked
+
+
+@dataclass
+class Note:
+    rel: str                  # "Tasks/foo.md"
+    folder: str               # top-level content folder (Tasks | …) | Home | Root | Stray
+    stem: str
+    text: str                 # decoded, BOM stripped, CRLF normalised to LF
+    fm: Optional[Frontmatter]
+    fm_error: Optional[str]
+    raw: str = ""             # decoded text exactly as on disk (minus BOM)
+    bom: bool = False
+    crlf: bool = False
+    bad_utf8: bool = False
+    too_large: bool = False
+
+    @property
+    def fixable_file(self) -> bool:
+        """Whether --fix may rewrite this file at all."""
+        return not (self.bad_utf8 or self.too_large)
+
+    @property
+    def body_start_line(self) -> int:
+        return self.fm.end_line + 1 if self.fm else 1
+
+    @property
+    def body(self) -> str:
+        return self.text[self.fm.body_offset:] if self.fm else self.text
+
+    @property
+    def title(self) -> Optional[str]:
+        return self.fm.scalar("title") if self.fm else None
+
+    @property
+    def state_entry(self) -> Optional["Entry"]:
+        """The GTD state field: a project's `phase`, a task's `status` (Agents/schema.md)."""
+        if not self.fm:
+            return None
+        if self.folder == "Projects":
+            return self.fm.get("phase")
+        if self.folder == "Tasks":
+            return self.fm.get("status")
+        return self.fm.get("phase") or self.fm.get("status")
+
+    @property
+    def state(self) -> Optional[str]:
+        e = self.state_entry
+        return e.value.text if e and e.kind == "scalar" and e.value else None
+
+    @property
+    def is_project(self) -> bool:
+        """In Projects/, or archived from there."""
+        return self.folder == "Projects" or (self.folder == "Archive" and self.fm is not None
+                                             and self.fm.scalar("archived_from") == "Projects")
+
+    @property
+    def is_note(self) -> bool:
+        return self.folder in CONTENT_DIRS or self.folder == "Home"
+
+    @property
+    def is_template(self) -> bool:
+        """Manual templates: body is Templater source, exempt from body checks."""
+        return self.rel.startswith(TEMPLATE_DIR + "/") or (
+            self.folder == "Agents" and self.fm is not None and self.fm.scalar("type") == "template")
+
+
+def body_lines_outside_code(note: Note) -> Iterator[tuple]:
+    """Yield (line_no, text) for body lines, with fenced blocks skipped and
+    inline code spans blanked out."""
+    fence = None
+    for i, line in enumerate(note.body.split("\n")):
+        ln = note.body_start_line + i
+        m = re.match(r"^ {0,3}(`{3,}|~{3,})", line)
+        if fence:
+            if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence) \
+                    and line.strip() == m.group(1):
+                fence = None
+            continue
+        if m:
+            fence = m.group(1)
+            continue
+        yield ln, re.sub(r"(`+)(.+?)\1", lambda mm: " " * len(mm.group(0)), line)
+
+
+def parse_link(inner: str) -> str:
+    """'target#h|alias' -> 'target#h' (handles table-escaped '\\|')."""
+    target = re.split(r"\\?\|", inner, maxsplit=1)[0]
+    return target.strip()
+
+
+class Vault:
+    def __init__(self, root: Path, today: dt.date):
+        self.root = root
+        self.today = today
+        self.notes: dict = {}          # rel -> Note
+        self.files: list = []          # every non-dot file rel path
+        self.dirs: list = []           # every non-dot dir rel path
+        self.by_stem: dict = {}        # lower stem -> [rel] (md notes)
+        self.by_name: dict = {}        # lower filename -> [rel] (any file)
+        self.by_path: dict = {}        # lower rel path (and without .md) -> rel
+        self.symlinks: list = []       # rel paths that are symlinks (never followed)
+        self.store_files: list = []    # rel paths under _files/, when the store is attached
+        self.cfg = load_config(root)
+        for key in self.cfg["retired_fields"]:  # this vault's own retired fields: an error, and --fix deletes them
+            if key not in RETIRED:
+                RETIRED.append(key)
+            RETIRED_REDUNDANT.add(key)
+        self.store_state = store_state(root, self.cfg["store_image"])
+        self.store_attached = self.store_state == "attached"
+        self._scan()
+        if self.store_attached:
+            self._scan_store()
+
+    def _scan(self):
+        for dirpath, dirnames, filenames in os.walk(self.root):
+            reldir = os.path.relpath(dirpath, self.root)
+            reldir = "" if reldir == "." else reldir
+            keep = []
+            for d in sorted(dirnames):
+                if d.startswith(".") or (reldir == "" and d in SKIPPED_DIRS):
+                    continue  # tooling, agent scratch, and the drop folders: never indexed
+                rel = f"{reldir}/{d}" if reldir else d
+                if os.path.islink(os.path.join(dirpath, d)):
+                    self.symlinks.append(rel)  # os.walk won't descend; report only
+                    continue
+                keep.append(d)
+                self.dirs.append(rel)
+            dirnames[:] = keep
+            for fn in sorted(filenames):
+                if fn.startswith(".") or fn in IGNORED_NAMES or (reldir == "" and fn in SKIPPED_DIRS):
+                    continue  # (a store symlink whose target is missing lists as a file)
+                rel = f"{reldir}/{fn}" if reldir else fn
+                if os.path.islink(os.path.join(dirpath, fn)):
+                    self.symlinks.append(rel)  # resolvable as a link target, never read
+                    self.by_name.setdefault(fn.lower(), []).append(rel)
+                    self.by_path[rel.lower()] = rel
+                    if fn.endswith(".md"):
+                        self.by_path[rel[:-3].lower()] = rel
+                        self.by_stem.setdefault(fn[:-3].lower(), []).append(rel)
+                    continue
+                self.files.append(rel)
+                self.by_name.setdefault(fn.lower(), []).append(rel)
+                self.by_path[rel.lower()] = rel
+                if fn.endswith(".md"):
+                    self.by_path[rel[:-3].lower()] = rel
+                    self.by_stem.setdefault(fn[:-3].lower(), []).append(rel)
+                    if not rel.startswith(ATTACH_DIR + "/") and ("/" in rel or rel == "Home.md"):
+                        self._load(rel)  # root AGENTS.md is not a vault note
+
+    def _scan_store(self):
+        """Index the file store through the _files symlink (followed, unlike other symlinks)."""
+        base = self.root / STORE_DIR
+        for dirpath, dirnames, filenames in os.walk(base, followlinks=True):
+            top = os.path.realpath(dirpath) == os.path.realpath(base)
+            # _private/ holds values waiting for the password manager (Agents/sensitive-data.md): never indexed or linked
+            dirnames[:] = sorted(d for d in dirnames if not d.startswith(".") and not (top and d == STORE_PRIVATE))
+            reldir = os.path.relpath(dirpath, base)
+            for fn in sorted(filenames):
+                if fn.startswith(".") or fn in IGNORED_NAMES:
+                    continue
+                rel = STORE_DIR + "/" + (f"{reldir}/{fn}" if reldir != "." else fn)
+                self.store_files.append(rel)
+                self.by_name.setdefault(fn.lower(), []).append(rel)
+                self.by_path[rel.lower()] = rel
+
+    def _load(self, rel: str):
+        parts = rel.split("/")
+        if len(parts) == 1:
+            folder = "Home" if rel == "Home.md" else "Root"
+        elif parts[0] in CONTENT_DIRS:
+            folder = parts[0]  # subfolders keep their top-level folder's schema
+        else:
+            folder = "Stray"
+        path = self.root / rel
+        flags = {}
+        try:
+            size = path.stat().st_size
+            data = b"" if size > MAX_NOTE_BYTES else path.read_bytes()
+        except OSError:
+            size, data = 0, b""
+            flags["bad_utf8"] = True  # unreadable: reported by file-format
+        if size > MAX_NOTE_BYTES:
+            flags["too_large"] = True
+        try:
+            raw = data.decode("utf-8")
+        except UnicodeDecodeError:
+            raw = data.decode("utf-8", errors="replace")
+            flags["bad_utf8"] = True
+        if raw.startswith("﻿"):
+            raw = raw[1:]
+            flags["bom"] = True
+        text = raw
+        if "\r\n" in raw:
+            flags["crlf"] = True
+            text = raw.replace("\r\n", "\n")
+        fm, err = (None, None)
+        if flags.get("too_large"):
+            err = "file too large to check"
+        elif folder != "Root" or text.startswith("---\n"):
+            fm, err = parse_frontmatter(text)
+        self.notes[rel] = Note(rel, folder, Path(rel).stem, text, fm, err, raw=raw, **flags)
+
+    # -- link resolution ---------------------------------------------------
+    def resolve_all(self, target: str, source: str) -> list:
+        """Every file a link target could mean (Obsidian matches basenames
+        case-insensitively, so duplicates make a link ambiguous)."""
+        target = target.split("#", 1)[0].strip()
+        if target == "":
+            return [source]  # same-note heading/block link
+        low = target.lower().lstrip("/")
+        if "/" in low:
+            hit = self.by_path.get(low) or self.by_path.get(low + ".md")
+            if hit:
+                return [hit]
+            # Obsidian also accepts a path suffix.
+            return sorted({r for k, r in self.by_path.items() if k.endswith("/" + low)
+                           or k.endswith("/" + low + ".md")})
+        if low.endswith(".md"):
+            low = low[:-3]
+        return list(self.by_stem.get(low) or self.by_name.get(low) or [])
+
+    def resolve(self, target: str, source: str) -> Optional[str]:
+        """Best single match: exact-case basename, then same folder as source."""
+        cands = self.resolve_all(target, source)
+        if len(cands) <= 1:
+            return cands[0] if cands else None
+        base = target.split("#", 1)[0].strip()
+        exact = [c for c in cands if Path(c).stem == base or Path(c).name == base]
+        same = [c for c in cands if self.folder_of(c) == self.folder_of(source)]
+        return (exact or same or cands)[0]
+
+    def folder_of(self, rel: str) -> str:
+        return rel.split("/", 1)[0] if "/" in rel else ""
+
+    def archive_origin(self, rel: str) -> Optional[str]:
+        """Folder an Archive note came from: archived_from, else inferred."""
+        note = self.notes.get(rel)
+        if not note or not note.fm:
+            return None
+        origin = note.fm.scalar("archived_from")
+        if origin:
+            return origin
+        keys = {e.key for e in note.fm.entries}
+        if "relationship" in keys:
+            return "People"
+        if note.fm.scalar("type") in RESOURCE_TYPES:
+            return "Resources"
+        status = note.fm.scalar("status")
+        if status in ("inbox", "queued", "next-action", "waiting-for") or keys & {"project", "parent", "blocked_by"}:
+            return "Tasks"
+        if "phase" in keys:
+            return "Projects"
+        return None
+
+    @property
+    def refs(self) -> dict:
+        """rel -> {source rel: embedded?}; computed once."""
+        if not hasattr(self, "_refs"):
+            self._refs = _references(self)
+        return self._refs
+
+    def content_notes(self, *folders) -> Iterator[Note]:
+        for n in self.notes.values():
+            if n.folder in folders:
+                yield n
+
+
+# --------------------------------------------------------------------------
+# Helpers
+# --------------------------------------------------------------------------
+
+def slugify(title: str) -> str:
+    """Agents/naming-and-style.md: ASCII-fold, lowercase, drop apostrophes,
+    non-alphanumeric runs to '-', trim."""
+    s = unicodedata.normalize("NFKD", title).encode("ascii", "ignore").decode()
+    s = s.lower().replace("'", "")
+    s = re.sub(r"[^a-z0-9]+", "-", s)
+    return s.strip("-")
+
+
+KEBAB = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+_EMOJI = re.compile(
+    "[\U0001F000-\U0001FAFF\U00002600-\U000027BF\U00002B00-\U00002BFF"
+    "\U0001F1E6-\U0001F1FF\U0000FE0F\U0000200D\U00002300-\U000023FF]"
+)
+
+
+def has_emoji(s: str) -> bool:
+    return bool(_EMOJI.search(s))
+
+
+def parse_date(s: str) -> Optional[dt.date]:
+    if not ISO_DATE.match(s or ""):
+        return None
+    if len(s) > 10 and not (int(s[11:13]) < 24 and int(s[14:16]) < 60):
+        return None
+    try:
+        return dt.date.fromisoformat(s[:10])
+    except ValueError:
+        return None
+
+
+def link_target(v: Value) -> Optional[str]:
+    m = WIKILINK_FULL.match(v.text.strip())
+    return parse_link(v.text.strip()[2:-2]) if m else None
+
+
+# --------------------------------------------------------------------------
+# Checks
+# --------------------------------------------------------------------------
+
+@check("structure", "allowed top-level folders/files, templates, roles and logs in Agents/, attachments only in _attachments/")
+def check_structure(v: Vault) -> Iterator[Finding]:
+    for d in v.dirs:
+        parts = d.split("/")
+        if parts[0] == ATTACH_DIR:
+            continue
+        if len(parts) == 1 and parts[0] not in ALLOWED_DIRS:
+            yield Finding("structure", ERROR, d + "/", 0,
+                          f"top-level folder '{d}' is not allowed (only {', '.join(sorted(ALLOWED_DIRS))})")
+    for f in v.files:
+        parts = f.split("/")
+        if parts[0] == ATTACH_DIR or (parts[0] not in ALLOWED_DIRS and len(parts) > 1):
+            continue  # attachments fine; disallowed top dirs already reported
+        if len(parts) == 1:
+            if f not in ROOT_FILES:
+                yield Finding("structure", ERROR, f, 0,
+                              f"file not allowed at vault root (only {', '.join(sorted(ROOT_FILES))})")
+            continue
+        if not f.endswith(".md"):
+            if re.fullmatch(VIEWS_DIR + r"/[a-z0-9-]+/view\.(js|css)", f):
+                continue  # a shared Dataview view script (Agents/body-sections.md, Task status view)
+            yield Finding("structure", ERROR, f, 0,
+                          f"non-note file outside _attachments/; move it there (view scripts: {VIEWS_DIR}/<name>/view.js)")
+            continue
+        for prefix, home in (("template-", TEMPLATE_DIR), ("role-", ROLE_DIR), ("log-", LOG_DIR)):
+            if parts[0] == "Agents" and parts[-1].startswith(prefix) and "/".join(parts[:-1]) != home:
+                if prefix == "role-" and "/".join(parts[:-1]) == LOCAL_ROLE_DIR and parts[-1].endswith("-local.md"):
+                    continue  # a vault's own additions to a kit role (Agents/README.md, Kit-managed pages)
+                where = f"{home}/" + (f" (a vault's additions to a role: {LOCAL_ROLE_DIR}/role-<name>-local.md)" if prefix == "role-" else "")
+                yield Finding("structure", ERROR, f, 0, f"{prefix}*.md notes live in {where}")
+
+
+@check("file-format", "UTF-8 without BOM, LF line endings, readable size, no symlinks")
+def check_file_format(v: Vault) -> Iterator[Finding]:
+    for rel in v.symlinks:
+        yield Finding("file-format", WARNING, rel, 0,
+                      "symlink; sync and backup may not carry it, and vault-lint does not follow it")
+    for n in v.notes.values():
+        if n.bad_utf8:
+            yield Finding("file-format", ERROR, n.rel, 0,
+                          "not valid UTF-8 (or unreadable); re-save as UTF-8. --fix skips it")
+        if n.too_large:
+            yield Finding("file-format", WARNING, n.rel, 0,
+                          f"larger than {MAX_NOTE_BYTES // 1_000_000} MB; content checks skipped. "
+                          "Large content belongs in _attachments/")
+        if n.bom:
+            yield Finding("file-format", WARNING, n.rel, 1,
+                          "UTF-8 byte-order mark before the frontmatter", n.fm is not None and not n.fm.unsafe)
+        if n.crlf:
+            yield Finding("file-format", WARNING, n.rel, 0,
+                          "CRLF (Windows) line endings; save with LF. --fix keeps them as they are")
+
+
+@check("frontmatter-present", "every note opens with a closed --- frontmatter block")
+def check_frontmatter_present(v: Vault) -> Iterator[Finding]:
+    for n in v.notes.values():
+        if n.is_note and n.fm is None and not n.too_large:
+            yield Finding("frontmatter-present", ERROR, n.rel, 1, n.fm_error or "no frontmatter")
+
+
+FIX_TAGS = {"quote-link", "block-list", "drop-empty", "drop-blank", "indent", "drop-empty-item"}
+
+
+@check("frontmatter-syntax", "frontmatter stays inside the restricted YAML subset; key order")
+def check_frontmatter_syntax(v: Vault) -> Iterator[Finding]:
+    for n in v.notes.values():
+        if not n.fm or not (n.is_note or n.folder == "Stray"):
+            continue
+        for iss in n.fm.issues:
+            yield Finding("frontmatter-syntax", iss.severity, n.rel, iss.line, iss.message,
+                          iss.fix in FIX_TAGS and not n.fm.unsafe)
+        if not n.is_note:
+            continue
+        fields = dict(schema_for(n))
+        for e in n.fm.entries:
+            if e.key in DATE_FIELDS and e.kind == "scalar" and e.value.style == "double" \
+                    and ISO_DATE.match(e.value.text):
+                yield Finding("frontmatter-syntax", WARNING, n.rel, e.line,
+                              f"quoted date in '{e.key}'; write it unquoted", not n.fm.unsafe)
+        order = [name for name, _ in schema_for(n)]
+        known = [e.key for e in n.fm.entries if e.key in fields]
+        expected = sorted(known, key=order.index)
+        if known != expected:
+            first = next(i for i, (a, b) in enumerate(zip(known, expected)) if a != b)
+            e = n.fm.get(known[first])
+            yield Finding("frontmatter-syntax", WARNING, n.rel, e.line,
+                          f"keys out of schema order; expected: {', '.join(expected)}", not n.fm.unsafe)
+
+
+@check("filename", "kebab-case filename equal to slug(title); no emoji")
+def check_filename(v: Vault) -> Iterator[Finding]:
+    for n in v.notes.values():
+        if not n.is_note or n.rel in FILENAME_EXCEPTIONS:
+            continue
+        if has_emoji(n.stem):
+            yield Finding("filename", ERROR, n.rel, 0, "emoji in filename")
+        if not KEBAB.match(n.stem):
+            yield Finding("filename", ERROR, n.rel, 0, "filename is not kebab-case")
+            continue
+        if n.stem.lower().startswith("untitled"):
+            yield Finding("filename", WARNING, n.rel, 0, "'Untitled' note; give it a title and file it")
+        if n.folder == "Archive" and n.stem.startswith("archived-"):
+            yield Finding("filename", WARNING, n.rel, 0, "Archive filenames take no 'archived-' prefix")
+        t = n.title
+        if t and slugify(t) != n.stem and not n.is_template:  # templates are named template-<kind>
+            yield Finding("filename", WARNING, n.rel, 0,
+                          f"filename differs from slug of title ('{slugify(t)}.md')")
+
+
+def _link_key(rel: str) -> str:
+    """What a [[link]] to this file is matched on: note stem, or attachment filename."""
+    name = rel.rsplit("/", 1)[-1].lower()
+    return name[:-3] if name.endswith(".md") else name
+
+
+@check("unique-names", "every note/attachment basename is unique vault-wide (case-insensitive)")
+def check_unique_names(v: Vault) -> Iterator[Finding]:
+    groups: dict = {}
+    for rel in v.files:
+        if rel.startswith(RAW_DIR + "/") and not rel.endswith(".md"):
+            continue  # raw originals keep their source names, duplicates included
+        groups.setdefault(_link_key(rel), []).append(rel)
+    for key, rels in groups.items():
+        if len(rels) < 2:
+            continue
+        for rel in rels:
+            others = ", ".join(r for r in rels if r != rel)
+            yield Finding("unique-names", ERROR, rel, 0,
+                          f"basename '{key}' also used by {others}; [[{key}]] links are ambiguous")
+
+
+PROPER_NOUNS = {
+    # Generic names only. The owner's name comes from .tidyvault.yml (owner_full); People and Area
+    # titles are added at run time; everything else belongs in lint.proper_nouns of the vault's config.
+    "I", "Christmas", "Obsidian", "Dataview", "Templater", "Apple", "Google", "Amazon", "Linux", "Debian",
+    "Mom", "Dad", "Mom's", "Dad's",
+    "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday",
+    "January", "February", "March", "April", "May", "June", "July", "August", "September",
+    "October", "November", "December", "Jan", "Feb", "Mar", "Apr", "Jun", "Jul", "Aug",
+    "Sep", "Sept", "Oct", "Nov", "Dec",
+}
+
+
+# Multi-word names whose inner words are capitalised (shows, companies, products). A vault extends
+# this list in lint.proper_phrases of .tidyvault.yml.
+PROPER_PHRASES = ["Claude Code", "Obsidian Sync", "Visual Studio Code"]
+
+
+def _proper_nouns(v: Vault) -> set:
+    names = set(PROPER_NOUNS) | set(v.cfg["proper_nouns"])
+    for w in re.findall(r"[A-Za-z][\w'’-]*", v.cfg["owner_full"]):
+        names.add(w)
+        names.add(w + "'s")
+        names.add(w + "’s")
+    for n in v.content_notes("People", "Areas"):
+        for w in re.findall(r"[A-Za-z][\w'’-]*", n.title or ""):
+            names.add(w)
+            names.add(w + "'s")
+            names.add(w + "’s")
+    return names
+
+
+def title_case_ratio(title: str, proper: set, phrases: Iterable[str] = ()) -> tuple:
+    for phrase in list(PROPER_PHRASES) + list(phrases):
+        title = re.sub(re.escape(phrase), "0", title, flags=re.I)
+    words = [w.strip("()[]{}\"“”,.:;!?—–") for w in title.split()]
+    words = [w for w in words if w]
+    rest = words[1:]
+    if len(rest) < 3:
+        return 0, len(rest)
+    caps = 0
+    for w in rest:
+        if w in proper or any(c.isdigit() for c in w):
+            continue
+        letters = re.sub(r"[^A-Za-z]", "", w)
+        if len(letters) >= 2 and letters.isupper():
+            continue  # acronym
+        if w[0].isupper():
+            caps += 1
+    return caps, len(rest)
+
+
+@check("title", "title present, sentence case, matches the H1, no emoji")
+def check_title(v: Vault) -> Iterator[Finding]:
+    proper = _proper_nouns(v)
+    for n in v.notes.values():
+        if not n.is_note or not n.fm:
+            continue
+        e = n.fm.get("title")
+        t = n.title
+        if not t:
+            continue  # schema reports missing title
+        line = e.line
+        if has_emoji(t):
+            yield Finding("title", ERROR, n.rel, line, "emoji in title")
+        if re.search("[\u2018\u2019\u201c\u201d]", t):
+            yield Finding("title", WARNING, n.rel, line, "curly quotes in title; use straight ' and \" (the H1 must match)")
+        caps, total = title_case_ratio(t, proper, v.cfg["proper_phrases"])
+        if total and caps / total > 0.5:
+            yield Finding("title", WARNING, n.rel, line, f"title looks like Title Case; use sentence case: {t}")
+        if re.search(r"[.,;:!?]$", t):
+            yield Finding("title", WARNING, n.rel, line, "title ends with punctuation")
+        if n.folder == "Archive" and re.match(r"^[(\[]?archived\b", t, re.I):
+            yield Finding("title", WARNING, n.rel, line, "Archive titles take no '(Archived)' prefix")
+        if n.is_template:
+            continue
+        h1 = next(((ln, s[2:].strip()) for ln, s in body_lines_outside_code(n) if s.startswith("# ")), None)
+        if h1 is None:
+            yield Finding("title", ERROR, n.rel, n.body_start_line, f"no '# {t}' H1 in body")
+        elif h1[1] != t:
+            yield Finding("title", ERROR, n.rel, h1[0], f"H1 '{h1[1]}' does not match title '{t}'")
+
+
+def _check_type(spec, entry: Entry, folder: str) -> Iterator[str]:
+    kind, arg = spec
+    is_list = entry.kind in ("list", "inline")
+    if entry.kind == "empty":
+        return
+    if kind in ("links", "tags", "enum-list", "text-list"):
+        if not is_list:
+            yield f"'{entry.key}' must be a block list"
+            return
+        for it in entry.items:
+            if kind == "tags" and not KEBAB.match(it.text):
+                yield f"tag '{it.text}' must be kebab-case with no '#'"
+            if kind == "text-list" and WIKILINK_ANY.search(it.text):
+                yield f"'{entry.key}' holds plain text, not links: {it.text}"
+            if kind == "enum-list" and it.text not in arg:
+                yield f"'{entry.key}' value '{it.text}' not in {{{', '.join(sorted(arg))}}}"
+        return
+    if is_list:
+        yield f"'{entry.key}' must be a single value, not a list"
+        return
+    val = entry.value.text
+    if kind == "enum" and val not in arg:
+        yield f"'{entry.key}: {val}' not in {{{', '.join(sorted(arg))}}}"
+    elif kind == "date" and not parse_date(val):
+        yield f"'{entry.key}: {val}' is not an ISO date (YYYY-MM-DD)"
+    elif kind == "true" and val != "true":
+        yield f"'{entry.key}' is only present when true; delete it otherwise"
+    elif kind == "url" and not val.startswith("http"):
+        yield f"'url: {val}' must start with http"
+    elif kind == "text" and val.strip() == "":
+        yield f"'{entry.key}' is empty"
+
+
+@check("schema", "per-folder fields, required fields, enums, types, retired fields")
+def check_schema(v: Vault) -> Iterator[Finding]:
+    for n in v.notes.values():
+        if not n.is_note or not n.fm:
+            continue
+        spec = dict(schema_for(n))
+        for e in n.fm.entries:
+            if e.key in RETIRED:
+                redundant = e.key in RETIRED_REDUNDANT or (e.key == "archive" and e.value and e.value.text == "false")
+                yield Finding("schema", ERROR, n.rel, e.line, f"retired field '{e.key}'",
+                              redundant and not n.fm.unsafe)
+                continue
+            if e.key == "status" and _status_to_phase(n):
+                yield Finding("schema", ERROR, n.rel, e.line,
+                              "projects take 'phase', not 'status' (Agents/schema.md)", not n.fm.unsafe)
+                continue
+            if e.key not in spec:
+                where = "Home.md" if n.folder == "Home" else f"{n.folder}/"
+                yield Finding("schema", ERROR, n.rel, e.line, f"field '{e.key}' is not allowed in {where}")
+                continue
+            for msg in _check_type(spec[e.key], e, n.folder):
+                yield Finding("schema", ERROR, n.rel, e.line, msg)
+        is_log = n.folder == "Agents" and n.fm.scalar("type") == "log"
+        for req in REQUIRED.get(n.folder, []) + (["date"] if is_log else []):
+            e = n.fm.get(req)
+            if e is None or e.kind == "empty":
+                yield Finding("schema", ERROR, n.rel, 1, f"required field '{req}' missing")
+        for val in n.fm.values("tags"):
+            if val.text in NOT_TOPIC_TAGS:
+                yield Finding("schema", WARNING, n.rel, val.line,
+                              f"tag '{val.text}' is a status/type/context/priority; tags are topics only")
+        if n.folder == "Agents" and (n.fm.scalar("type") == "log") != n.rel.startswith(LOG_DIR + "/"):
+            yield Finding("schema", ERROR, n.rel, n.fm.get("type").line if n.fm.get("type") else 1,
+                          f"{LOG_DIR}/ notes, and only they, take 'type: log'")
+        if n.folder == "Agents" and n.fm.scalar("type") in ("manual", "template"):
+            named = n.rel.startswith(TEMPLATE_DIR + "/")
+            if named != (n.fm.scalar("type") == "template"):
+                yield Finding("schema", ERROR, n.rel, n.fm.get("type").line,
+                              f"{TEMPLATE_DIR}/ notes, and only they, take 'type: template'")
+        if n.folder == "Resources" and n.fm.get("date") and n.fm.scalar("type") not in (None, "document", "log"):
+            yield Finding("schema", WARNING, n.rel, n.fm.get("date").line,
+                          "'date' is for document and log resources")
+        if n.folder == "Resources" and n.fm.scalar("type") == "log" and \
+                any(v.text == "agent-work" for v in n.fm.values("tags")):
+            yield Finding("schema", WARNING, n.rel, n.fm.get("type").line,
+                          f"an agent's run record goes in {LOG_DIR}/, not a log Resource")
+
+
+NOT_TOPIC_TAGS = (set(TASK_STATUS) | set(PROJECT_PHASE) | CONTEXTS | RESOURCE_TYPES | PRIORITY
+                  | {"task", "project", "area", "person", "resource", "todo", "someday"})
+LINK_FIELD_KINDS = {"link", "links"}
+
+
+@check("links", "every wikilink/embed resolves; frontmatter link fields hold only links")
+def check_links(v: Vault) -> Iterator[Finding]:
+    unchecked: dict = {}  # note -> store links that couldn't be checked (store not attached)
+    for n in v.notes.values():
+        if n.fm:
+            spec = dict(schema_for(n)) if n.is_note else {}
+            for e in n.fm.entries:
+                is_link_field = spec.get(e.key, (None,))[0] in LINK_FIELD_KINDS
+                for val in n.fm.values(e.key):
+                    if is_link_field and not WIKILINK_FULL.match(val.text.strip()):
+                        yield Finding("links", ERROR, n.rel, val.line,
+                                      f"'{e.key}' must hold only [[links]], found: {val.text[:60]}")
+                    for m in WIKILINK_ANY.finditer(val.text):
+                        tgt = parse_link(m.group(2))
+                        if v.resolve(tgt, n.rel) is None:
+                            yield Finding("links", ERROR, n.rel, val.line, f"unresolved link [[{tgt}]]")
+                        elif n.is_note and re.search(r"[|/#]|\.md$", m.group(2)):
+                            yield Finding("links", WARNING, n.rel, val.line,
+                                          f"frontmatter links are bare slugs: [[{Path(tgt.split('#')[0]).stem}]], "
+                                          "no folder, .md, heading or display text")
+        if n.is_template:
+            continue
+        for ln, line in body_lines_outside_code(n):
+            for m in WIKILINK_ANY.finditer(line):
+                tgt = parse_link(m.group(2))
+                hit = v.resolve(tgt, n.rel)
+                kind = "embed" if m.group(1) else "link"
+                if hit is None and tgt.startswith(STORE_DIR + "/"):
+                    # File store links resolve through the _files symlink, which only the Mac has.
+                    store_file = v.root / tgt.split("#", 1)[0].split("|", 1)[0].strip()
+                    if not v.store_attached:
+                        unchecked[n.rel] = unchecked.get(n.rel, 0) + 1
+                    elif not store_file.is_file():
+                        yield Finding("links", ERROR, n.rel, ln, f"{kind} not found in the file store [[{tgt}]]")
+                    continue
+                if hit is None:
+                    yield Finding("links", ERROR, n.rel, ln, f"unresolved {kind} [[{tgt}]]")
+                elif "#" in tgt and not _anchor_ok(v, hit, tgt.split("#", 1)[1]):
+                    yield Finding("links", WARNING, n.rel, ln,
+                                  f"[[{tgt}]]: no such heading or block in {hit}")
+                elif m.group(1) and hit.endswith(".md"):
+                    yield Finding("links", WARNING, n.rel, ln,
+                                  f"![[{tgt}]] transcludes a note; embeds are for attachments, use [[{tgt}]]")
+    if unchecked:  # one line per run, not one per link (Agents/organization.md, File store)
+        why = "locked (.scripts/store-image unlock)" if v.store_state == "locked" else "not attached here"
+        yield Finding("links", INFO, STORE_DIR + "/", 0,
+                      f"file store {why}; {sum(unchecked.values())} link(s) in {len(unchecked)} note(s) not checked")
+
+
+def _norm_heading(h: str) -> str:
+    return re.sub(r"[^\w]+", " ", h.lower()).strip()
+
+
+def _anchor_ok(v: Vault, rel: str, anchor: str) -> bool:
+    """Does `rel` have the heading (last '#' segment) or ^block the link names?"""
+    note = v.notes.get(rel)
+    if note is None or note.too_large or not anchor.strip():
+        return True  # attachments, unloaded notes: nothing to check
+    anchor = anchor.split("#")[-1].strip()
+    if anchor.startswith("^"):
+        return re.search(r"(?m)\s" + re.escape(anchor) + r"\s*$", note.body) is not None
+    want = _norm_heading(anchor)
+    if want == _norm_heading(note.title or ""):
+        return True
+    return any(_norm_heading(line.lstrip("#")) == want
+               for _, line in body_lines_outside_code(note) if re.match(r"^#{1,6} ", line))
+
+
+def _relation_ok(v: Vault, rel: str, folders: set) -> bool:
+    folder = v.folder_of(rel)
+    if folder in folders:
+        return True
+    if "roles" in folders and rel.startswith(ROLE_DIR + "/role-"):
+        return True  # a task an agent owns (Agents/gtd.md, Agent tasks)
+    if folder == "Archive":
+        origin = v.archive_origin(rel)
+        return origin is None or origin in folders
+    return False
+
+
+@check("relations", "relation fields point into the right folder")
+def check_relations(v: Vault) -> Iterator[Finding]:
+    for n in v.notes.values():
+        if not n.is_note or not n.fm or n.folder in ("Agents", "Home"):
+            continue
+        for key, folders in RELATION_TARGETS.items():
+            for val in n.fm.values(key):
+                tgt = link_target(val)
+                if not tgt:
+                    continue
+                cands = v.resolve_all(tgt, n.rel)
+                if not cands or any(_relation_ok(v, c, folders) for c in cands):
+                    continue  # unresolved is reported by `links`; ambiguity by `filename`
+                rel = cands[0]
+                folder = v.folder_of(rel)
+                want = " or ".join(sorted(folders))
+                yield Finding("relations", ERROR, n.rel, val.line,
+                              f"'{key}' → [[{tgt}]] is in {folder or 'the vault root'}/, expected {want}/")
+
+
+@check("waiting-on", "waiting_on points to a person or an organization Resource")
+def check_waiting_on(v: Vault) -> Iterator[Finding]:
+    for n in v.notes.values():
+        if not n.is_note or not n.fm:
+            continue
+        for val in n.fm.values("waiting_on"):
+            tgt = link_target(val)
+            rel = v.resolve(tgt, n.rel) if tgt else None
+            if rel and v.folder_of(rel) == "Resources":
+                t = v.notes.get(rel)
+                if not (t and t.fm and t.fm.scalar("type") == "organization"):
+                    yield Finding("waiting-on", ERROR, n.rel, val.line,
+                                  f"'waiting_on' → [[{tgt}]] is a Resource but not type: organization")
+
+
+def _tasks_for_projects(v: Vault) -> dict:
+    out: dict = {}
+    for t in v.content_notes("Tasks"):
+        if not t.fm:
+            continue
+        for val in t.fm.values("project"):
+            tgt = link_target(val)
+            rel = v.resolve(tgt, t.rel) if tgt else None
+            if rel:
+                out.setdefault(rel, []).append(t)
+    return out
+
+
+def _word_count(title: str) -> int:
+    return len([w for w in re.split(r"\s+", title.strip()) if re.search(r"\w", w)])
+
+
+@check("tasks", "GTD task rules: name length, waiting-for, project/area, blockers, due, closure")
+def check_tasks(v: Vault) -> Iterator[Finding]:
+    for t in v.content_notes("Tasks"):
+        fm = t.fm
+        if not fm:
+            continue
+        status = fm.scalar("status")
+        title = t.title or ""
+        tl = fm.get("title").line if fm.get("title") else 1
+        sl = fm.get("status").line if fm.get("status") else 1
+        wc = _word_count(title)
+        if title and not (2 <= wc <= 5):
+            yield Finding("tasks", WARNING, t.rel, tl, f"task name is {wc} words; keep it 2–5")
+        is_open = status in OPEN_TASK
+        if status == "waiting-for":
+            for req in ("waiting_on", "waiting_since"):
+                if not fm.get(req):
+                    yield Finding("tasks", ERROR, t.rel, sl, f"waiting-for task needs '{req}'")
+        if is_open and not fm.values("project") and not fm.values("area"):
+            yield Finding("tasks", ERROR, t.rel, sl, "open task has neither 'project' nor 'area'")
+        if fm.values("project") and fm.values("area"):
+            yield Finding("tasks", WARNING, t.rel, fm.get("area").line,
+                          "'area' is only for tasks without a 'project'")
+        if status == "inbox" and fm.values("project"):
+            yield Finding("tasks", WARNING, t.rel, sl,
+                          "inbox task already has a 'project'; it's clarified, so make it queued or next-action")
+        if status == "queued" and not fm.values("project") and not fm.values("blocked_by"):
+            yield Finding("tasks", WARNING, t.rel, sl,
+                          "queued is for project steps or blocked tasks; set 'project' or 'blocked_by', or make it next-action")
+        if status == "inbox" and fm.get("due"):
+            yield Finding("tasks", WARNING, t.rel, fm.get("due").line,
+                          "inbox task has a 'due' date; clarify it now")
+        if status == "next-action":
+            for val in fm.values("blocked_by"):
+                tgt = link_target(val)
+                rel = v.resolve(tgt, t.rel) if tgt else None
+                blocker = v.notes.get(rel) if rel else None
+                if blocker and blocker.fm and blocker.fm.scalar("status") in OPEN_TASK:
+                    yield Finding("tasks", WARNING, t.rel, val.line,
+                                  f"next-action is blocked by open task [[{tgt}]]; a blocked task isn't next-action")
+        due = parse_date(fm.scalar("due") or "")
+        if is_open and due and due < v.today:
+            yield Finding("tasks", WARNING, t.rel, fm.get("due").line,
+                          f"overdue: due {due.isoformat()} and still {status}")
+        if status in CLOSED:
+            yield Finding("tasks", WARNING, t.rel, sl, f"task is {status}; archive it")
+            if not fm.get("completed"):
+                yield Finding("tasks", WARNING, t.rel, sl, f"{status} task has no 'completed' date")
+        if is_open and fm.get("completed"):
+            yield Finding("tasks", ERROR, t.rel, fm.get("completed").line, "open task has a 'completed' date")
+        if status in ("inbox", "queued", "next-action"):
+            for key in ("waiting_on", "waiting_since"):
+                if fm.get(key):
+                    yield Finding("tasks", WARNING, t.rel, fm.get(key).line,
+                                  f"'{key}' on a {status} task; delete it when the task leaves waiting-for")
+        if "agenda" in fm.texts("contexts") and not fm.values("people"):
+            yield Finding("tasks", WARNING, t.rel, fm.get("contexts").line,
+                          "'agenda' context needs 'people' (who to raise it with)")
+        for val in fm.values("assignee"):
+            rel = v.resolve(link_target(val) or "", t.rel)
+            owner = v.notes.get(rel) if rel else None
+            if owner and owner.fm and owner.fm.scalar("relationship") == "self":
+                yield Finding("tasks", WARNING, t.rel, val.line,
+                              f"'assignee' is for people other than {v.cfg['owner']}; omit it when {v.cfg['owner']} owns the task")
+        if is_open:
+            for val in fm.values("project"):
+                rel = v.resolve(link_target(val) or "", t.rel)
+                proj = v.notes.get(rel) if rel else None
+                if proj and proj.fm and (proj.folder == "Archive" or proj.state in CLOSED):
+                    where = "archived" if proj.folder == "Archive" else proj.state
+                    yield Finding("tasks", ERROR, t.rel, val.line,
+                                  f"open task under {where} project [[{proj.stem}]]; close the task or reopen the project")
+        for val in fm.values("blocked_by"):
+            if v.resolve(link_target(val) or "", t.rel) == t.rel:
+                yield Finding("tasks", ERROR, t.rel, val.line, "task is blocked by itself")
+    yield from _blocker_cycles(v)
+
+
+def _blocker_cycles(v: Vault) -> Iterator[Finding]:
+    """Report each blocked_by cycle once, on its alphabetically first member."""
+    graph = {}
+    for t in v.content_notes("Tasks"):
+        if t.fm:
+            deps = [v.resolve(link_target(x) or "", t.rel) for x in t.fm.values("blocked_by")]
+            graph[t.rel] = [d for d in deps if d and d != t.rel and d.startswith("Tasks/")]
+    seen_cycles = set()
+    for start in sorted(graph):
+        stack, path = [(start, iter(graph[start]))], [start]
+        on_path = {start}
+        while stack:
+            node, it = stack[-1]
+            nxt = next(it, None)
+            if nxt is None:
+                stack.pop()
+                on_path.discard(path.pop())
+                continue
+            if nxt == start:
+                cyc = frozenset(path)
+                if cyc not in seen_cycles and min(cyc) == start:
+                    seen_cycles.add(cyc)
+                    names = " → ".join(Path(p).stem for p in path + [start])
+                    yield Finding("tasks", ERROR, start, 0, f"blocked_by cycle: {names}")
+                continue
+            if nxt in on_path or nxt not in graph or len(path) > 50:
+                continue
+            path.append(nxt)
+            on_path.add(nxt)
+            stack.append((nxt, iter(graph[nxt])))
+
+
+# Agents/gtd.md project state machine: allowed next-action counts per phase (None = no upper limit).
+PROJECT_NEXT_ACTIONS = {"planned": (0, 0), "not-started": (1, None), "in-progress": (1, None), "waiting": (0, 0)}
+
+
+@check("projects", "project state machine (Agents/gtd.md): next actions, waiting, closure")
+def check_projects(v: Vault) -> Iterator[Finding]:
+    by_project = _tasks_for_projects(v)
+    for p in v.content_notes("Projects"):
+        if not p.fm:
+            continue
+        status = p.state
+        sl = p.state_entry.line if p.state_entry else 1
+        tasks = by_project.get(p.rel, [])
+        nexts = [t for t in tasks if t.fm.scalar("status") == "next-action"]
+        waits = [t for t in tasks if t.fm.scalar("status") == "waiting-for"]
+        open_ = [t for t in tasks if t.fm.scalar("status") in OPEN_TASK]
+        names = ", ".join(t.stem for t in nexts[:6]) + (", …" if len(nexts) > 6 else "")
+        wc = _word_count(p.title or "")
+        if p.title and not 2 <= wc <= 6:
+            yield Finding("projects", WARNING, p.rel, p.fm.get("title").line,
+                          f"project title is {wc} words; name the outcome in 2–6")
+        if status in PROJECT_NEXT_ACTIONS:
+            lo, hi = PROJECT_NEXT_ACTIONS[status]
+            if lo == 1 and not nexts:
+                yield Finding("projects", WARNING, p.rel, sl, f"{status} project has no next action")
+            elif hi == 0 and nexts:
+                yield Finding("projects", WARNING, p.rel, sl,
+                              f"{status} project has {len(nexts)} next-action task(s); it should have none ({names})")
+        if status == "waiting" and not waits:
+            yield Finding("projects", WARNING, p.rel, sl, "waiting project has no waiting-for task")
+        if p.fm.get("health") and not p.fm.get("last_sweep"):
+            yield Finding("projects", WARNING, p.rel, p.fm.get("health").line,
+                          "'health' without 'last_sweep'; a sweep sets both (Agents/body-sections.md, Project status)")
+        if p.fm.get("last_sweep") and "Status" not in sections(p):
+            yield Finding("projects", WARNING, p.rel, p.fm.get("last_sweep").line,
+                          "swept project has no '## Status' section")
+        if status in CLOSED:
+            if open_:
+                yield Finding("projects", ERROR, p.rel, sl, f"project is {status} but has {len(open_)} open task(s)")
+            yield Finding("projects", WARNING, p.rel, sl, f"project is {status}; archive it")
+            if not p.fm.get("completed"):
+                yield Finding("projects", WARNING, p.rel, sl, f"{status} project has no 'completed' date")
+
+
+ACTIVE_PROJECT = {"planned", "not-started", "in-progress", "waiting"}
+
+
+@check("archive", "archived tasks and projects are closed and dated")
+def check_archive(v: Vault) -> Iterator[Finding]:
+    for n in v.content_notes("Archive"):
+        if not n.fm:
+            continue
+        origin = v.archive_origin(n.rel)
+        status = n.state
+        sl = n.state_entry.line if n.state_entry else 1
+        if origin in ("Tasks", "Projects") and status in (OPEN_TASK | ACTIVE_PROJECT):
+            key = "phase" if origin == "Projects" else "status"
+            yield Finding("archive", WARNING, n.rel, sl,
+                          f"archived but {key} is {status}; close it, or move it back to {origin}/ to reopen")
+        if origin in ("Tasks", "Projects") and status in CLOSED and not n.fm.get("completed"):
+            yield Finding("archive", INFO, n.rel, sl, f"{status} but no 'completed' date")
+
+
+# ---- attachments -----------------------------------------------------------
+
+def _references(v: Vault) -> dict:
+    """rel -> {source rel: embedded?} for every resolvable link in the vault."""
+    refs: dict = {}
+    for n in v.notes.values():
+        pairs = []
+        if not n.is_template:
+            pairs += [(m.group(1), m.group(2)) for _, line in body_lines_outside_code(n)
+                      for m in WIKILINK_ANY.finditer(line)]
+        if n.fm:
+            pairs += [(m.group(1), m.group(2)) for e in n.fm.entries for val in n.fm.values(e.key)
+                      for m in WIKILINK_ANY.finditer(val.text)]
+        for bang, inner in pairs:
+            rel = v.resolve(parse_link(inner), n.rel)
+            if rel and rel != n.rel:
+                d = refs.setdefault(rel, {})
+                d[n.rel] = d.get(n.rel, False) or bool(bang)
+    return refs
+
+
+@check("attachments", "attachments in _attachments/<note-slug>/, embedded by their note; orphans")
+def check_attachments(v: Vault) -> Iterator[Finding]:
+    refs = v.refs
+    to_move: dict = {}  # note-slug folder -> files that belong in the file store
+    for rel in v.files + v.store_files:
+        parts = rel.split("/")
+        if parts[0] not in (ATTACH_DIR, STORE_DIR):
+            continue
+        top = parts[0]
+        if rel.endswith(".md"):
+            yield Finding("attachments", WARNING, rel, 0, f"a note inside {top}/; notes belong in a content folder")
+            continue
+        if rel.startswith(RAW_DIR + "/"):
+            continue  # raw originals: any depth, never embedded; notes embed the renamed copy
+        if len(parts) == 2:
+            yield Finding("attachments", WARNING, rel, 0,
+                          f"attachment at the top of {top}/; move it to {top}/<note-slug>/")
+        elif len(parts) > 3:
+            yield Finding("attachments", WARNING, rel, 0,
+                          f"nested too deep; attachments sit directly in {top}/<note-slug>/")
+        if top == ATTACH_DIR and v.store_attached and len(parts) == 3:
+            try:
+                if belongs_in_store(rel, (v.root / rel).stat().st_size):
+                    to_move.setdefault(parts[1], []).append(rel)
+            except OSError:
+                pass
+        sources = refs.get(rel, {})
+        if not sources:
+            yield Finding("attachments", INFO, rel, 0, "orphan: no note embeds or links this attachment")
+        if len(parts) != 3:
+            continue
+        folder, name = parts[1], parts[2]
+        stem, _, ext = name.rpartition(".")
+        if not KEBAB.match(stem or ext) or ext != ext.lower():
+            yield Finding("attachments", WARNING, rel, 0, "attachment filename is not kebab-case")
+        owners = [r for r in v.by_stem.get(folder, []) if r in v.notes and v.notes[r].is_note]
+        if not owners:
+            yield Finding("attachments", WARNING, rel, 0,
+                          f"folder '{folder}/' matches no note; name it after the note that embeds the file")
+        elif not any(sources.get(o) for o in owners):
+            yield Finding("attachments", WARNING, rel, 0,
+                          f"not embedded by its note [[{folder}]]; add ![[{name}]] there")
+    for folder, rels in sorted(to_move.items()):
+        yield Finding("attachments", INFO, f"{ATTACH_DIR}/{folder}/", 0,
+                      f"{len(rels)} file(s) belong in the file store; run .scripts/store-move")
+
+
+# ---- note anatomy ----------------------------------------------------------
+
+# Agents/body-sections.md: sections marked required, each holding a Dataview block.
+REQUIRED_SECTIONS = {
+    "Projects": ["Tasks"],
+    "Areas": ["Projects", "Tasks"],
+}
+TEMPLATER_TAG = re.compile(r"<%[-_*+]?\s.*?%>|<%\*")  # Agents/procedures.md: only Agents/templates/ notes hold them
+REVISIT = re.compile(r"\(revisit ([^)]*)\)")
+# Pictographic emoji only; dingbats like ✓ → ★ are not flagged in body text.
+_BODY_EMOJI = re.compile("[\U0001F000-\U0001FAFF]|[\U00002190-\U00002BFF]\U0000FE0F")
+HEADING_EMOJI_LINE = re.compile(r"#{2,6}\s")  # the H1 is the title, checked by `title`
+
+
+def sections(note: Note) -> dict:
+    """'## Heading' -> (line, [body lines incl. fences]) for level-2 sections."""
+    out, cur = {}, None
+    fence = None
+    for i, line in enumerate(note.body.split("\n")):
+        ln = note.body_start_line + i
+        m = re.match(r"^ {0,3}(`{3,}|~{3,})", line)
+        if fence:
+            if m and m.group(1)[0] == fence[0] and line.strip() == m.group(1):
+                fence = None
+        elif m:
+            fence = m.group(1)
+        elif line.startswith("## "):
+            cur = line[3:].strip()
+            out.setdefault(cur, (ln, []))
+            continue
+        elif line.startswith("# "):
+            cur = None
+        if cur is not None:
+            out[cur][1].append(line)
+    return out
+
+
+MANIFEST = RAW_DIR + "/manifest.tsv"  # where each filed attachment came from, one row per filed copy
+MANIFEST_COLUMNS = ["sha256", "size", "filed_path", "original_path", "original_name", "imported"]
+HASH_MANIFEST = False  # set by main() for `--only manifest`
+
+
+@check("manifest", "every _attachments/_raw/manifest.tsv row names a filed attachment that exists, unchanged")
+def check_manifest(v: Vault) -> Iterator[Finding]:
+    import hashlib
+    path = v.root / MANIFEST
+    if not path.is_file():
+        return
+    lines = path.read_text(encoding="utf-8").split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    if not lines or lines[0].split("\t") != MANIFEST_COLUMNS:
+        yield Finding("manifest", ERROR, MANIFEST, 1, "header must be: " + " ".join(MANIFEST_COLUMNS))
+        return
+    store_skipped = 0
+    for n, line in enumerate(lines[1:], start=2):
+        cols = line.split("\t")
+        if len(cols) != len(MANIFEST_COLUMNS):
+            yield Finding("manifest", ERROR, MANIFEST, n, f"expected {len(MANIFEST_COLUMNS)} tab-separated columns, got {len(cols)}")
+            continue
+        sha, size, filed = cols[0], cols[1], cols[2]
+        if not re.fullmatch(r"[0-9a-f]{64}", sha) or not size.isdigit():
+            yield Finding("manifest", ERROR, MANIFEST, n, "sha256 must be 64 hex digits and size a whole number")
+            continue
+        f = v.root / filed
+        if filed.startswith(STORE_DIR + "/") and not v.store_attached:
+            store_skipped += 1
+            continue
+        in_place = filed.startswith((ATTACH_DIR + "/", STORE_DIR + "/")) and not filed.startswith(RAW_DIR + "/")
+        if not in_place or not f.is_file():
+            yield Finding("manifest", ERROR, MANIFEST, n,
+                          f"filed file missing: {filed} (it is the only copy: restore it from git or, for _files/, from the store backup; or update the row if it was renamed)")
+            continue
+        if f.stat().st_size != int(size):
+            yield Finding("manifest", ERROR, MANIFEST, n, f"filed file changed since import (size): {filed}")
+            continue
+        if HASH_MANIFEST:
+            h = hashlib.sha256()
+            with f.open("rb") as fh:
+                for chunk in iter(lambda: fh.read(1 << 20), b""):
+                    h.update(chunk)
+            if h.hexdigest() != sha:
+                yield Finding("manifest", ERROR, MANIFEST, n, f"filed file changed since import (checksum): {filed}")
+    if store_skipped:
+        yield Finding("manifest", INFO, MANIFEST, 0,
+                      f"{store_skipped} row(s) name file store files; the store isn't attached here, so they weren't checked")
+
+
+@check("anatomy", "required body sections and Dataview blocks per note type (Agents/body-sections.md)")
+def check_anatomy(v: Vault) -> Iterator[Finding]:
+    for n in v.notes.values():
+        if not n.is_note or not n.fm or n.is_template:
+            continue
+        secs = sections(n)
+        for name in REQUIRED_SECTIONS.get(n.folder, []):
+            if name not in secs:
+                yield Finding("anatomy", WARNING, n.rel, n.body_start_line,
+                              f"missing required '## {name}' section (Dataview block, see Agents/body-sections.md)")
+            elif not (any(re.match(r"^ {0,3}(```|~~~)\s*dataview\b", l) for l in secs[name][1])
+                      or any(ok for _, _, ok in dvjs_blocks(secs[name][1]))):
+                yield Finding("anatomy", WARNING, n.rel, secs[name][0],
+                              f"'## {name}' has no Dataview block")
+        h1s = [ln for ln, s in body_lines_outside_code(n) if s.startswith("# ")]
+        for ln in h1s[1:]:
+            yield Finding("anatomy", WARNING, n.rel, ln, "second '# ' heading; the title is the only H1, use '##'")
+        if n.folder == "Agents" and n.stem != "README":
+            first = next((s for _, s in body_lines_outside_code(n)
+                          if s.strip() and not s.startswith("# ")), "")
+            if "[[README]]" not in first:
+                yield Finding("anatomy", WARNING, n.rel, n.body_start_line,
+                              "first line after the H1 should be 'Part of the [[README]].'")
+        if n.folder == "Resources":
+            rtype = n.fm.scalar("type")
+            if rtype == "log" and not n.fm.get("date"):
+                yield Finding("anatomy", WARNING, n.rel, n.fm.get("type").line, "log resource has no 'date'")
+        if "Someday/maybe" in secs:
+            ln0 = secs["Someday/maybe"][0]
+            if n.folder not in ("Areas", "Agents"):
+                yield Finding("anatomy", WARNING, n.rel, ln0, "'## Someday/maybe' belongs in Area notes")
+            for i, line in enumerate(secs["Someday/maybe"][1]):
+                for m in REVISIT.finditer(line):
+                    if not parse_date(m.group(1).strip()):
+                        yield Finding("anatomy", WARNING, n.rel, ln0 + 1 + i,
+                                      f"'(revisit {m.group(1)})' needs an ISO date: (revisit YYYY-MM-DD)")
+        tag = next((i + 1 for i, line in enumerate(n.text.split("\n")) if TEMPLATER_TAG.search(line)), None)
+        if tag:
+            yield Finding("anatomy", WARNING, n.rel, tag,
+                          "Templater tag outside Agents/templates/; replace it with its value")
+        for ln, line in body_lines_outside_code(n):
+            # Emoji are fine in body text; only section headings stay plain (heading links match them exactly).
+            if HEADING_EMOJI_LINE.match(line) and _BODY_EMOJI.search(line):
+                yield Finding("anatomy", WARNING, n.rel, ln, "emoji in heading")
+                break
+
+
+# ---- Dataview ------------------------------------------------------------
+
+DV_KEYWORDS = {"table", "list", "task", "calendar", "without", "id", "from", "where", "sort",
+               "group", "by", "flatten", "limit", "asc", "desc", "ascending", "descending",
+               "and", "or", "not", "as", "true", "false", "null"}
+DV_IMPLICIT = {"file", "this", "row", "rows", "key", "today", "now", "tomorrow", "yesterday",
+               "sow", "eow", "som", "eom", "soy", "eoy", "Infinity"}
+DV_FENCE = re.compile(r"^ {0,3}(```|~~~)\s*dataview\s*$")
+DVJS_FENCE = re.compile(r"^ {0,3}(```|~~~)\s*dataviewjs\b")
+DVJS_INLINE = re.compile(r"`\$=\s*[^`\s]")  # an inline DataviewJS query: `$= expression`
+DVJS_HOME = "Home.md"  # the one note allowed to run any DataviewJS
+VIEWS_DIR = "Agents/views"  # shared Dataview view scripts: <name>/view.js and view.css (Agents/body-sections.md)
+# The one DataviewJS block any note may hold: a call to one of the vault's own views in
+# Agents/views/<name>/, with string options only.
+DVJS_VIEW_CALL = re.compile(r'^await dv\.view\("Agents/views/[a-z0-9]+(?:-[a-z0-9]+)*"'
+                            r'(, \{\s*(?:\w+:\s*"[^"\\]*"\s*(?:,\s*\w+:\s*"[^"\\]*"\s*)*)?\})?\);?$')
+
+
+def dvjs_blocks(lines):
+    """Yield (fence line index, body lines, allowed) for each dataviewjs block; allowed = a view call."""
+    i = 0
+    while i < len(lines):
+        m = DVJS_FENCE.match(lines[i])
+        if not m:
+            i += 1
+            continue
+        j = i + 1
+        while j < len(lines) and lines[j].strip() != m.group(1):
+            j += 1
+        body = [l for l in lines[i + 1:j] if l.strip()]
+        yield i, body, len(body) == 1 and bool(DVJS_VIEW_CALL.match(body[0].strip()))
+        i = j + 1
+
+
+def all_schema_fields() -> set:
+    names = {n for n, _ in COMMON_HEAD + COMMON_TAIL + ARCHIVE_EXTRA + MANUAL_FIELDS}
+    for fields in FOLDER_FIELDS.values():
+        names |= {n for n, _ in fields}
+    return names
+
+
+def dataview_identifiers(query: str) -> Iterator[tuple]:
+    """Yield (line offset, name) for bare field references in a DQL query."""
+    known_local = set()
+    for qi, qline in enumerate(query.split("\n")):
+        s = re.sub(r'"(?:[^"\\]|\\.)*"', '""', qline)           # string literals
+        s = re.sub(r"\[\[[^\]]*\]\]", " ", s)                     # link literals
+        s = re.sub(r"#[\w/-]+", " ", s)                            # tag sources
+        s = re.sub(r"\b(dur|date)\(([^()]*)\)", r"\1()", s, flags=re.I)  # dur(2 days)
+        for m in re.finditer(r"\(([^()]*)\)\s*=>|\b([A-Za-z_]\w*)\s*=>", s):
+            known_local |= set(re.findall(r"[A-Za-z_]\w*", m.group(1) or m.group(2)))
+        for m in re.finditer(r"\bAS\s+([A-Za-z_]\w*)", s, flags=re.I):
+            known_local.add(m.group(1))
+        for m in re.finditer(r"(?<![\w.\-])([A-Za-z_][\w-]*[\w]|[A-Za-z_])", s):
+            name = m.group(1)
+            rest = s[m.end():]
+            if re.match(r"\s*\(", rest) or re.match(r"\s*=>", rest):
+                continue  # function call or lambda parameter
+            if name.lower() in DV_KEYWORDS or name in known_local:
+                continue
+            yield qi, name
+
+
+@check("dataview", "Dataview blocks use schema fields and existing FROM folders")
+def check_dataview(v: Vault) -> Iterator[Finding]:
+    fields = all_schema_fields() | DV_IMPLICIT
+    folders = set(v.dirs)
+    for n in v.notes.values():
+        if not n.is_note and n.folder != "Stray":
+            continue
+        lines = n.body.split("\n")
+        i = 0
+        while i < len(lines):
+            m = DV_FENCE.match(lines[i])
+            if not m:
+                i += 1
+                continue
+            start = i + 1
+            j = start
+            while j < len(lines) and lines[j].strip() != m.group(1):
+                j += 1
+            query = "\n".join(lines[start:j])
+            base = n.body_start_line + start
+            reported = set()
+            for off, name in dataview_identifiers(query):
+                if name not in fields and name not in reported:
+                    reported.add(name)
+                    yield Finding("dataview", WARNING, n.rel, base + off,
+                                  f"Dataview query uses '{name}', which is not a schema field")
+            for off, qline in enumerate(query.split("\n")):
+                fm_ = re.match(r"^\s*FROM\s+(.*)$", qline, re.I)
+                if fm_:
+                    for src in re.findall(r'"([^"]+)"', fm_.group(1)):
+                        s = src.strip("/")
+                        if s not in folders and v.by_path.get(s.lower()) is None:
+                            yield Finding("dataview", WARNING, n.rel, base + off,
+                                          f"Dataview FROM \"{src}\" is not a folder or note in the vault")
+            i = j + 1
+
+
+@check("dataviewjs", "DataviewJS runs code when a note opens: only Home.md may have it, except a one-line call to a view in Agents/views/; drop folders are scanned too")
+def check_dataviewjs(v: Vault) -> Iterator[Finding]:
+    def hits(text, allow_view=False):
+        lines = text.split("\n")
+        for i, body, allowed in dvjs_blocks(lines):
+            if not (allow_view and allowed):
+                yield i + 1, "dataviewjs block"
+        for i, line in enumerate(lines):
+            if DVJS_INLINE.search(line):
+                yield i + 1, "inline DataviewJS query (`$=`)"
+    for n in v.notes.values():
+        if n.rel == DVJS_HOME:
+            continue
+        for ln, what in hits(n.text, allow_view=True):
+            yield Finding("dataviewjs", ERROR, n.rel, ln,
+                          f"{what}: only {DVJS_HOME} may run DataviewJS, or a one-line Agents/views/<name> call "
+                          f"(Agents/body-sections.md); use a DQL 'dataview' block, or fence it as text")
+    # Notes waiting in the drop folders aren't indexed, but Obsidian runs their code if they're opened.
+    for top in (IMPORTS_DIR, CAPTURES_DIR):
+        for dirpath, dirnames, filenames in os.walk(v.root / top):
+            dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+            for fn in sorted(filenames):
+                if not fn.lower().endswith(".md"):
+                    continue
+                path = Path(dirpath) / fn
+                try:
+                    text = path.read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    continue
+                rel = path.relative_to(v.root).as_posix()
+                for ln, what in hits(text):
+                    yield Finding("dataviewjs", WARNING, rel, ln,
+                                  f"{what} in a drop-folder note: don't open it in Obsidian; the importer fences it as text before filing")
+
+
+# ---- dates -----------------------------------------------------------------
+
+@check("dates", "dates are plausible: nothing completed, created or handed off in the future")
+def check_dates(v: Vault) -> Iterator[Finding]:
+    for n in v.notes.values():
+        if not n.is_note or not n.fm:
+            continue
+        d = {k: parse_date(n.fm.scalar(k) or "") for k in DATE_FIELDS}
+        line = lambda k: n.fm.get(k).line  # noqa: E731
+        if d["completed"] and d["completed"] > v.today:
+            yield Finding("dates", ERROR, n.rel, line("completed"), f"'completed' {d['completed']} is in the future")
+        if d["created"] and d["created"] > v.today:
+            yield Finding("dates", WARNING, n.rel, line("created"), f"'created' {d['created']} is in the future")
+        if d["waiting_since"] and d["waiting_since"] > v.today:
+            yield Finding("dates", WARNING, n.rel, line("waiting_since"),
+                          f"'waiting_since' {d['waiting_since']} is in the future")
+        if d["created"] and d["completed"] and d["completed"] < d["created"]:
+            yield Finding("dates", WARNING, n.rel, line("completed"), "'completed' is before 'created'")
+        for k in ("due", "created", "completed", "waiting_since", "date"):
+            if d[k] and not (2000 <= d[k].year <= v.today.year + 20):
+                yield Finding("dates", WARNING, n.rel, line(k), f"'{k}' {d[k]} looks like a typo")
+
+
+SENSITIVE = [
+    (re.compile(r"(?<![\d-])\d{3}-\d{2}-\d{4}(?![\d-])"), "possible SSN"),
+    (re.compile(r"(?i)(?<!confirmation )(?<!confirmation: )(?<!confirmation #)(?<!invoice )(?<!order )"
+                r"(?<!order #)(?<!tracking )(?<![\w.,/+-])\d{9,}(?![\d,/-]|\.\d)"),
+     "long digit run (account number?)"),
+    (re.compile(r"(?<!\d)\d{4}[ -]\d{4}[ -]\d{4}[ -]\d{1,4}(?!\d)"), "possible card number"),
+    (re.compile(r"(?i)\b(?:password|passwd|passcode)\s*[:=]\s*[^\s\"'`<{$]"), "credential value (password:)"),
+    (re.compile(r"(?i)\bapi[_-]?key\b\s*[:=]"), "credential value (api key)"),
+    (re.compile(r"(?i)\bPIN\b(?: code)?\s*(?:is|[:=#])\s*\d{4,8}\b"), "credential value (PIN)"),
+    (re.compile(r"(?i)\b(?:CVV|CVC|CVV2|security code)\b\s*(?:is|[:=#])?\s*\d{3,4}\b"), "card security code"),
+    (re.compile(r"(?i)\b(?:recovery|backup) codes?\s*[:=]\s*[A-Za-z0-9]{4,}"), "recovery code"),
+    (re.compile(r"\b(?:sk|rk|pk)-[A-Za-z0-9_-]{16,}"), "secret key (sk-…)"),
+    (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"), "private key block"),
+    (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), "AWS access key"),
+    (re.compile(r"\bgh[pousr]_[A-Za-z0-9]{30,}"), "GitHub token"),
+    (re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}"), "Slack token"),
+]
+_URLISH = re.compile(r"https?://\S+|\[\[[^\]]*\]\]|\([^)\s]*\.(?:pdf|png|jpe?g)\)")
+PII_SEVERITY = ERROR  # raised 2026-09-28 (PII plan step 8), once the redaction reached 0
+
+
+def _mask(s: str) -> str:
+    return ("…" + s[-4:]) if len(s) > 4 else "…"
+
+
+_MONTH = r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?"
+PII_CONTACT = [
+    (re.compile(r"(?<![\w.$/+-])(?:\+?1[ .-]?)?(?:\((\d{3})\)\s?|(\d{3})[ .-])\d{3}[ .-]\d{4}(?![\w/-])"), "phone number"),
+    (re.compile(r"\b([A-Za-z0-9._%+-]+)@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"), "email address"),
+    (re.compile(r"\b\d{1,6}(?:-\d{1,4})? (?:[NSEW]\.? )?(?:[A-Z0-9][A-Za-z0-9'.-]* ){1,4}"
+                r"(?:St|Street|Ave|Avenue|Rd|Road|Blvd|Boulevard|Dr|Drive|Ln|Lane|Way|Ct|Court|Pl|Place"
+                r"|Ter|Terrace|Pkwy|Parkway|Cir|Circle|Hwy|Highway|Trl|Trail|Sq|Square)\b\.?"), "street address"),
+]
+PII_DOB = re.compile(r"(?i)\b(?:dob|d\.o\.b\.?|date of birth|birth ?date|born(?: on)?)\b[\s:,-]*"
+                     r"(?:\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}|\d{4}-\d{2}-\d{2}|" + _MONTH + r" \d{1,2},? \d{4}|\d{1,2} "
+                     + _MONTH + r" \d{4})")
+# A business's own phone, email, or address stays (Agents/sensitive-data.md): the line names the business.
+_BUSINESS_LINE = re.compile(
+    r"(?i)\b(?:inc|llc|ltd|corp|company|clinic|hospital|medical|health|center|centre|office|bank|credit union"
+    r"|store|shop|restaurant|hotel|salon|studio|church|school|university|college|law|attorney|firm|agency"
+    r"|department|dept|services?|support|customer|pharmacy|dental|practice|group|associates|foundation"
+    r"|funeral|venue|theat(?:er|re)|gallery|museum|club|cafe|market|insurance|realty|management|apartments"
+    r"|therapy|surgery|surgical|physicians|imaging|radiology|urgent care|lab|labs"
+    r"|fax|toll[- ]free|main line|front desk)\b")
+_TOLL_FREE = {"800", "888", "877", "866", "855", "844", "833"}
+_ROLE_MAILBOX = re.compile(r"(?i)^(?:info|support|help|hello|contact|billing|no-?reply|service|orders|sales|admin"
+                           r"|team|office|press|privacy|care|customerservice|feedback|accounts|reservations"
+                           r"|volunteers?|bookings?|paralegal|client ?services?\d*|reception|frontdesk|leasing"
+                           r"|events|membership|appointments|scheduling)$")
+PII_ALLOWLIST = "Agents/pii-allowlist.md"  # business email domains and addresses the pii check skips
+# Public registry numbers: a provider's NPI, a business's tax ID or EIN, on a line that names the business.
+_REGISTRY_LABEL = re.compile(r"(?i)\b(?:NPI|tax ?id|TIN|EIN)\b\W{0,4}$")
+_PET_LINE = re.compile(r"(?i)\b(?:cat|cats|dog|dogs|kitten|puppy|pet|pets)\b")
+
+
+def _pii_allowlist(v: Vault) -> set:
+    if not hasattr(v, "_pii_allow"):
+        v._pii_allow = set()
+        note = v.notes.get(PII_ALLOWLIST)
+        for m in re.finditer(r"^- `([^`]+)`", note.text if note else "", re.M):
+            v._pii_allow.add(m.group(1).strip().lower())
+    return v._pii_allow
+# Not values: inline code (filenames, paths) and app links (message:, x-apple-…:, obsidian:).
+_PII_SCRUB = re.compile(r"`[^`]*`|\b(?:message|x-[\w-]+|obsidian|shortcuts|file|mid|cid):\S+")
+PII_SCOPE = ("Tasks", "Projects", "Areas", "Resources", "People", "Archive")
+
+
+def _org_line(v: Vault, line: str, source: str) -> bool:
+    """The line links an organization Resource, so its contact details are a business's."""
+    for m in re.finditer(r"\[\[([^\]|#]+)", line):
+        rel = v.resolve(m.group(1), source)
+        t = v.notes.get(rel) if rel else None
+        if t and t.fm and t.fm.scalar("type") == "organization":
+            return True
+    return False
+
+
+def pii_hits(v: Vault, n) -> Iterator[tuple]:
+    """(line number, label, matched text) for each PII value in a note (Agents/sensitive-data.md)."""
+    # An organization, or a professional contact's Person file: its phone, email, and address are a business's.
+    is_org = bool(n.fm and (n.fm.scalar("type") == "organization"
+                            or (n.folder == "People" and n.fm.scalar("relationship") == "professional")))
+    public = bool(n.fm and n.fm.scalar("public_places") == "true")
+    for i, line in enumerate(n.text.split("\n")):
+        scrubbed = _PII_SCRUB.sub(" ", _URLISH.sub(" ", line))
+        for rx, label in SENSITIVE:
+            m = rx.search(scrubbed)
+            if m and not (label.startswith("long digit run") and _REGISTRY_LABEL.search(scrubbed[:m.start()])
+                          and (is_org or _BUSINESS_LINE.search(line) or _org_line(v, line, n.rel))):
+                yield i + 1, label, m.group(0)
+        m = PII_DOB.search(scrubbed)
+        if m and not _PET_LINE.search(line):
+            yield i + 1, "date of birth", m.group(0)
+        business = None  # worked out only when a contact pattern matches
+        for rx, label in PII_CONTACT:
+            if is_org or (public and label != "email address"):
+                continue
+            for m in rx.finditer(scrubbed):
+                if business is None:
+                    business = bool(_BUSINESS_LINE.search(line) or ("[[" in line and _org_line(v, line, n.rel)))
+                if business:
+                    break
+                if label == "phone number" and (m.group(1) or m.group(2)) in _TOLL_FREE:
+                    continue
+                if label == "email address":
+                    addr = m.group(0).lower()
+                    allow = _pii_allowlist(v)
+                    if _ROLE_MAILBOX.match(m.group(1)) or addr in allow or addr.split("@", 1)[1] in allow:
+                        continue
+                yield i + 1, label, m.group(0)
+                break
+
+
+def _pii_scope(n) -> bool:
+    if not n.is_note or n.is_template or n.rel == "Resources/pii-register.md":
+        return False
+    return n.rel == "Home.md" or n.rel.startswith(LOG_DIR + "/") or n.folder in PII_SCOPE
+
+
+@check("pii", "no PII values in notes or run logs: keys instead (Agents/sensitive-data.md)")
+def check_pii(v: Vault) -> Iterator[Finding]:
+    for n in v.notes.values():
+        if not _pii_scope(n):
+            continue
+        for ln, label, text in pii_hits(v, n):
+            yield Finding("pii", PII_SEVERITY, n.rel, ln,
+                          f"{label} ({_mask(text)}): replace it with its key, [[pii-register#<Person>|🔒 <key>]]")
+
+
+PII_KEY_LINK = re.compile(r"\[\[pii-register#[^\]]*\]\]")
+
+
+@check("sensitive", "notes with PII keys carry sensitive: true")
+def check_sensitive(v: Vault) -> Iterator[Finding]:
+    for n in v.notes.values():
+        if not _pii_scope(n):
+            continue
+        if n.fm and n.fm.scalar("sensitive") == "true":
+            continue
+        for i, line in enumerate(n.text.split("\n")):
+            if PII_KEY_LINK.search(line):
+                yield Finding("sensitive", WARNING, n.rel, i + 1,
+                              "has PII keys: add 'sensitive: true' to the frontmatter")
+                break
+
+
+# Body formatting: the vault-safe subset of the Obsidian Linter rules enabled in
+# .obsidian/plugins/obsidian-linter (Agents/obsidian-settings.md), so agent edits
+# match what the Linter produces on save. Fenced code (incl. Dataview) is untouched.
+_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+_HEADING = re.compile(r"^#{1,6}(\s|$)")
+_HR = re.compile(r"^ {0,3}([-*_])( *\1){2,} *$")
+_ALT_BULLET = re.compile(r"^(\s*)[*+•](?=\s)(?!\s*$)")
+_OL_PAREN = re.compile(r"^(\s*)(\d+)\)(?=\s)")
+_OL_ITEM = re.compile(r"^(\s*)(\d+)\.(?=\s)")
+_HEADING_PARTS = re.compile(r"^(#{1,6})(\s+|$)(.*?)$")  # bare "#": an empty heading (a fresh capture)
+_HEADING_PUNCT = ".,;:!"
+# spans the Linter's quote-style rule leaves alone
+_QUOTE_SKIP = re.compile(r"`[^`]*`|<%.*?%>|!?\[\[[^\]]*\]\]|!?\[[^\]]*\]\([^)]*\)|<[^>\n]+>|\$[^$\n]+\$")
+_CURLY = str.maketrans({"\u2018": "'", "\u2019": "'", "\u201c": '"', "\u201d": '"'})
+
+
+def _straight_quotes(line: str) -> str:
+    out, pos = [], 0
+    for m in _QUOTE_SKIP.finditer(line):
+        out.append(line[pos:m.start()].translate(_CURLY))
+        out.append(m.group(0))
+        pos = m.end()
+    out.append(line[pos:].translate(_CURLY))
+    return "".join(out)
+
+
+def _header_increment(levels: list) -> list:
+    """Port of the Obsidian Linter's header-increment rule (start-at-h2 off)."""
+    prev, stack, a, out = 0, [], [0] * 6, []
+    for f in levels:
+        f = min(f, 6)
+        if a[f - 1] >= 0 and f < prev:
+            h = len(a)
+            while stack and f <= stack[-1]:
+                h = stack.pop()
+            h = 0 if not stack else h - 1
+            for g in range(len(a) - 1, h - 1, -1):
+                a[g] = 0
+        if a[f - 1] <= 0:
+            g = min(len(stack) + 1, 6)
+            for v in range(prev, f - 1):
+                a[v] = g - 1
+            stack.append(f)
+            a[f - 1] = g
+        prev = f
+        out.append(a[f - 1])
+    return out
+
+
+def format_body(body: str) -> tuple:
+    """(new body, [changes]) for a note body (text after the closing ---)."""
+    changes = []
+    lines = body.split("\n")
+    # classify lines: (text, kind) kind in fence|heading|table|quote|blank|text
+    out, in_fence, fence_char = [], False, ""
+    for line in lines:
+        m = _FENCE.match(line)
+        if in_fence:
+            out.append([line, "fence"])
+            if m and m.group(1)[0] == fence_char and line.strip().startswith(fence_char * 3):
+                in_fence = False
+            continue
+        if m:
+            in_fence, fence_char = True, m.group(1)[0]
+            if line.strip() == m.group(1):
+                line = line.rstrip() + "text"
+                changes.append("code fence language 'text'")
+            out.append([line, "fence"])
+            continue
+        stripped = line.rstrip()
+        if stripped != line:
+            changes.append("trailing spaces")
+            line = stripped
+        if not _HR.match(line):
+            nb = _ALT_BULLET.sub(r"\1-", line)
+            if nb != line:
+                changes.append("list markers to '-'")
+                line = nb
+        nb = _OL_PAREN.sub(r"\1\2.", line)
+        if nb != line:
+            changes.append("ordered list markers to '.'")
+            line = nb
+        nb = _straight_quotes(line)
+        if nb != line:
+            changes.append("straight quotes")
+            line = nb
+        hm = _HEADING_PARTS.match(line)
+        if hm and hm.group(3).rstrip().rstrip(_HEADING_PUNCT) != hm.group(3).rstrip():
+            line = hm.group(1) + hm.group(2) + hm.group(3).rstrip().rstrip(_HEADING_PUNCT)
+            changes.append("heading trailing punctuation")
+        kind = ("blank" if not line.strip() else "heading" if _HEADING.match(line)
+                else "table" if line.lstrip().startswith("|") else "quote" if line.lstrip().startswith(">")
+                else "text")
+        out.append([line, kind])
+    heads = [k for k, (l, kind) in enumerate(out) if kind == "heading"]
+    fixed = _header_increment([len(_HEADING_PARTS.match(out[k][0]).group(1)) for k in heads])
+    for k, lvl in zip(heads, fixed):
+        cur = _HEADING_PARTS.match(out[k][0])
+        if len(cur.group(1)) != lvl:
+            out[k][0] = "#" * lvl + cur.group(2) + cur.group(3)
+            changes.append("heading levels increment by one")
+    # ordered lists: consecutive items at one indent count up from the first number (no blank-line gaps)
+    run_indent, n = None, 0
+    for row in out:
+        if row[1] != "text":
+            run_indent = None
+            continue
+        om = _OL_ITEM.match(row[0])
+        if om and (run_indent is None or om.group(1) == run_indent):
+            n = int(om.group(2)) if run_indent is None else n + 1  # preserve-start
+            run_indent = om.group(1)
+            if int(om.group(2)) != n:
+                row[0] = f"{om.group(1)}{n}." + row[0][om.end():]
+                changes.append("ordered list numbering")
+        elif not (run_indent is not None and row[0].startswith(run_indent + " ")):
+            run_indent = None
+    pre_pad = re.sub(r"\n{3,}", "\n\n", "\n".join(l for l, _ in out)).strip("\n")
+    # group consecutive fence/table/quote lines into blocks; headings are 1-line blocks
+    blocks, i = [], 0
+    while i < len(out):
+        kind = out[i][1]
+        j = i + 1
+        if kind == "fence":
+            # a fence block runs until its closing fence line
+            opener = _FENCE.match(out[i][0]).group(1)[0]
+            while j < len(out) and out[j][1] == "fence":
+                if out[j][0].strip().startswith(opener * 3) and _FENCE.match(out[j][0]):
+                    j += 1
+                    break
+                j += 1
+        elif kind in ("table", "quote", "text", "blank"):
+            while j < len(out) and out[j][1] == kind:
+                j += 1
+        blocks.append((kind, [l for l, _ in out[i:j]]))
+        i = j
+    # rebuild: padded kinds get one blank line before and after; runs of blanks collapse
+    result = []
+    padded = {"fence", "heading", "table", "quote"}
+    for idx, (kind, blines) in enumerate(blocks):
+        if kind == "blank":
+            if result and result[-1] != "":
+                result.append("")
+            continue
+        if kind in padded and result and result[-1] != "":
+            result.append("")
+        if kind not in padded and result and result[-1] != "" and _prev_padded(blocks, idx):
+            result.append("")
+        result.extend(blines)
+    new = "\n".join(result).strip("\n")
+    new = new + "\n" if new else ""
+    if new != body:
+        if "\n\n\n" in body:
+            changes.append("consecutive blank lines")
+        if not body.endswith("\n") or body.endswith("\n\n"):
+            changes.append("single newline at end of file")
+        if body.startswith("\n"):
+            changes.append("blank line after the frontmatter")
+        if pre_pad != new.strip("\n"):
+            changes.append("blank lines around headings, code fences, tables, or blockquotes")
+    return new, list(dict.fromkeys(changes))
+
+
+def _prev_padded(blocks, idx) -> bool:
+    for kind, _ in reversed(blocks[:idx]):
+        if kind == "blank":
+            return False
+        return kind in {"fence", "heading", "table", "quote"}
+    return False
+
+
+def _formattable(n) -> bool:
+    return bool(n.is_note and n.fm and not n.fm.unsafe and n.fixable_file and not n.is_template
+                and not n.crlf and n.folder not in ("Home",) or (n.is_note and n.fm and n.folder == "Home"
+                and not n.fm.unsafe and n.fixable_file and not n.crlf))
+
+
+@check("format", "body spacing and list markers match the Obsidian Linter rules (fix with --fix)")
+def check_format(v: Vault) -> Iterator[Finding]:
+    for n in v.notes.values():
+        if not _formattable(n):
+            continue
+        body = n.text[n.fm.body_offset:]
+        new, changes = format_body(body)
+        if new != body:
+            yield Finding("format", WARNING, n.rel, n.fm.end_line + 1,
+                          "formatting: " + ", ".join(changes), fixable=True)
+
+
+@check("orphans", "Resources nothing links to")
+def check_orphans(v: Vault) -> Iterator[Finding]:
+    for r in v.content_notes("Resources"):
+        if not v.refs.get(r.rel):
+            yield Finding("orphans", INFO, r.rel, 0, "no note links to this resource")
+
+
+FALSE_FACTS = "Resources/false-facts.md"
+LIVE_FOLDERS = ("Tasks", "Projects", "Areas", "Resources", "People", "Home")
+CURRENT_WORDS = re.compile(r"(?i)\b(currently|right now|still|as of)\b")
+# Citations (Agents/linking.md, Citations): a fact line ends "([[source-page]])" or "(<source>, YYYY-MM-DD[, [[run-log]]])".
+CITATION = re.compile(r"\((?=[^()]*(?:\[\[|\b\d{4}-\d{2}-\d{2}\b))[^()]*\)\s*\.?\s*$")
+# Key facts lines already in the baseline commit are legacy; later ones need a citation. The baseline is
+# VAULT_LINT_CITE_BASELINE, or the vault's first commit (so a fresh vault cites everything from day one).
+CITE_BASELINE = os.environ.get("VAULT_LINT_CITE_BASELINE", "")
+YEAR = re.compile(r"\b(19\d\d|20\d\d)\b")
+
+
+def _banned_patterns(v: Vault) -> Iterator[tuple]:
+    """(line, claim, compiled regex or None) per row of false-facts' Banned claims table."""
+    n = v.notes.get(FALSE_FACTS)
+    if not n:
+        return
+    cols, section = None, ""
+    for ln, line in enumerate(n.body.split("\n"), n.body_start_line):  # raw: patterns sit in `code`
+        if line.startswith("## "):
+            section, cols = line[3:].strip(), None
+            continue
+        if section != "Banned claims" or not line.lstrip().startswith("|"):
+            continue
+        cells = [c.strip() for c in re.split(r"(?<!\\)\|", line.strip().strip("|"))]
+        if cols is None:
+            cols = [c.lower() for c in cells]
+            continue
+        if set("".join(cells)) <= set("-: "):
+            continue
+        row = dict(zip(cols, cells))
+        pat = row.get("search", "").strip("`").strip().replace("\\|", "|")
+        try:
+            yield ln, row.get("claim", ""), re.compile(pat, re.I) if pat else None
+        except re.error as e:
+            yield ln, row.get("claim", ""), e
+
+
+@check("facts", "Resources and People: banned claims from false-facts, dated facts worded as current, "
+                "people named but not linked, Key facts added since the citation baseline without a citation "
+                "(Agents/roles/role-vault-docs.md, Check)")
+def check_facts(v: Vault) -> Iterator[Finding]:
+    # High: a banned claim is back in a live note.
+    pats = []
+    for ln, claim, rx in _banned_patterns(v):
+        if rx is None:
+            yield Finding("facts", INFO, FALSE_FACTS, ln, f"no Search pattern, so lint can't catch: {claim[:60]}")
+        elif isinstance(rx, re.error):
+            yield Finding("facts", ERROR, FALSE_FACTS, ln, f"bad Search regex: {rx}")
+        else:
+            pats.append((claim, rx))
+    for n in v.content_notes(*LIVE_FOLDERS):
+        hits = [(c, rx) for c, rx in pats if rx.search(n.text)]
+        if n.rel == FALSE_FACTS or n.is_template or not hits:
+            continue
+        for ln, line in enumerate(n.text.split("\n"), 1):
+            for claim, rx in hits:
+                if rx.search(line):
+                    yield Finding("facts", ERROR, n.rel, ln, f"banned claim ([[false-facts]]): {claim[:60]}")
+    # Medium: a Key fact worded as current but dated before last year.
+    for p in v.content_notes("People"):
+        in_kf = False
+        for ln, line in body_lines_outside_code(p):
+            if line.startswith("## "):
+                in_kf = line.strip() == "## Key facts"
+                continue
+            if in_kf and CURRENT_WORDS.search(line):
+                years = [int(y) for y in YEAR.findall(line)]
+                if years and max(years) < v.today.year - 1:
+                    yield Finding("facts", INFO, p.rel, ln,
+                                  f"worded as current but dated {max(years)}; still true?")
+    # Info: a Key facts line added since CITE_BASELINE with no citation.
+    yield from _uncited_key_facts(v)
+    # Low: a person named in full but not linked from the file.
+    people = {p.title: p.rel for p in v.content_notes("People")
+              if p.title and " " in p.title and p.stem != v.cfg["owner_slug"]}
+    if not people:
+        return
+    names = re.compile(r"\b(" + "|".join(map(re.escape, sorted(people, key=len, reverse=True))) + r")\b")
+    for n in list(v.content_notes("Resources")) + list(v.content_notes("People")):
+        if n.stem == "pii-register" or not names.search(n.body):
+            continue
+        seen = set()
+        for ln, line in body_lines_outside_code(n):
+            for m in names.finditer(line):
+                name, rel = m.group(1), people[m.group(1)]
+                if name in seen or rel == n.rel or n.rel in v.refs.get(rel, {}):
+                    continue
+                seen.add(name)
+                yield Finding("facts", INFO, n.rel, ln, f"names {name} but never links [[{Path(rel).stem}]]")
+
+
+def _key_fact_lines(n: Note) -> Iterator[tuple]:
+    in_kf, raw = False, n.text.split("\n")
+    for ln, line in body_lines_outside_code(n):
+        if line.startswith("#"):
+            in_kf = line.strip() == "## Key facts"
+        elif in_kf and re.match(r"\s*(?:[-*+]|\d+\.)\s+\S", line):
+            yield ln, raw[ln - 1]
+
+
+def _baseline_texts(root: Path, stems: set) -> Optional[dict]:
+    """stem -> file text at CITE_BASELINE (People, Resources, Archive); None when git or the commit is missing."""
+    import subprocess
+    try:
+        top = subprocess.run(["git", "-C", str(root), "rev-parse", "--show-toplevel"],
+                             capture_output=True, text=True, timeout=10)
+        if top.returncode != 0 or Path(top.stdout.strip()).resolve() != root.resolve():
+            return None
+        baseline = CITE_BASELINE
+        if not baseline:
+            first = subprocess.run(["git", "-C", str(root), "rev-list", "--max-parents=0", "HEAD"],
+                                   capture_output=True, text=True, timeout=10)
+            baseline = first.stdout.split()[0] if first.returncode == 0 and first.stdout.split() else ""
+            if not baseline:
+                return None
+        tree = subprocess.run(["git", "-C", str(root), "-c", "core.quotepath=off", "ls-tree", "-r",
+                               baseline, "--", "People", "Resources", "Archive"],
+                              capture_output=True, text=True, timeout=30)
+        if tree.returncode != 0:
+            return None
+        blobs = {}
+        for line in tree.stdout.split("\n"):
+            meta, _, path = line.partition("\t")
+            stem = Path(path).stem
+            if path.endswith(".md") and stem in stems:
+                blobs[meta.split()[2]] = stem
+        if not blobs:
+            return {}
+        cat = subprocess.run(["git", "-C", str(root), "cat-file", "--batch"], input=("\n".join(blobs) + "\n").encode(),
+                             capture_output=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    out, data, i = {}, cat.stdout, 0
+    while i < len(data):
+        nl = data.index(b"\n", i)
+        head = data[i:nl].split()
+        if len(head) < 3:  # "<sha> missing"
+            i = nl + 1
+            continue
+        size = int(head[2])
+        out[blobs.get(head[0].decode(), "")] = data[nl + 1:nl + 1 + size].decode("utf-8", "replace")
+        i = nl + 1 + size + 1
+    return out
+
+
+def _uncited_key_facts(v: Vault) -> Iterator[Finding]:
+    cand = {}
+    for n in list(v.content_notes("People")) + list(v.content_notes("Resources")):
+        if n.is_template:
+            continue
+        lines = [(ln, line) for ln, line in _key_fact_lines(n) if not CITATION.search(line)]
+        if lines:
+            cand[n.rel] = (n, lines)
+    if not cand:
+        return
+    base = _baseline_texts(v.root, {n.stem for n, _ in cand.values()})
+    if base is None:
+        return
+    for n, lines in cand.values():
+        old = {l.strip() for l in base.get(n.stem, "").split("\n")}
+        for ln, line in lines:
+            if line.strip() not in old:
+                yield Finding("facts", INFO, n.rel, ln, "Key fact added since the citation baseline has no citation "
+                                                       "([[linking#Citations]])")
+
+
+@check("source-urls", "URLs of read-only source systems (lint.read_only_url_patterns): error in frontmatter, info in body")
+def check_source_urls(v: Vault) -> Iterator[Finding]:
+    patterns = []
+    for p in v.cfg["read_only_url_patterns"]:
+        try:
+            patterns.append(re.compile(p, re.I))
+        except re.error as e:
+            yield Finding("source-urls", WARNING, CONFIG_FILE, 0, f"bad read_only_url_patterns regex {p!r}: {e}")
+    if not patterns:
+        return
+    for n in v.notes.values():
+        fm_end = n.fm.end_line if n.fm else 0
+        for i, line in enumerate(n.text.split("\n")):
+            if n.is_template and i + 1 > fm_end:
+                break
+            if any(p.search(line) for p in patterns):
+                if i + 1 <= fm_end:
+                    yield Finding("source-urls", ERROR, n.rel, i + 1, "read-only source URL in frontmatter")
+                else:
+                    yield Finding("source-urls", INFO, n.rel, i + 1, "read-only source URL in body")
+
+
+# --------------------------------------------------------------------------
+# --fix
+# --------------------------------------------------------------------------
+
+def _status_to_phase(n: Note) -> bool:
+    """A project (or one archived from Projects/) still on the old `status` key:
+    --fix renames it to `phase` (Agents/schema.md, 2026-10-11)."""
+    return n.is_project and n.fm is not None and n.fm.get("status") is not None and n.fm.get("phase") is None
+
+
+def _fixed_raw(v: Value, key: str) -> str:
+    if v.style == "plain" and WIKILINK_FULL.match(v.raw):
+        return f'"{v.raw}"'
+    if v.style == "double" and key in DATE_FIELDS and ISO_DATE.match(v.text):
+        return v.text
+    return v.raw
+
+
+def render_frontmatter(note: Note) -> tuple:
+    """Return (new_frontmatter_text, [change descriptions])."""
+    fm = note.fm
+    changes = []
+    order = [n for n, _ in schema_for(note)] if note.is_note else []
+    kept = []
+    for e in fm.entries:
+        if e.kind == "empty":
+            changes.append(f"deleted empty key '{e.key}'")
+            continue
+        if e.key in RETIRED_REDUNDANT or (e.key == "archive" and e.kind == "scalar" and e.value.text == "false"):
+            changes.append(f"deleted retired field '{e.key}'")
+            continue
+        if e.key == "status" and _status_to_phase(note):
+            e = Entry("phase", e.line, e.kind, e.value, e.items)
+            changes.append("renamed project 'status' to 'phase'")
+        kept.append(e)
+    known = [e for e in kept if e.key in order]
+    unknown = [e for e in kept if e.key not in order]
+    ordered = sorted(known, key=lambda e: order.index(e.key)) + unknown
+    if [e.key for e in ordered] != [e.key for e in kept]:
+        changes.append("reordered keys to schema order")
+    out = ["---"]
+    for e in ordered:
+        if e.kind == "scalar":
+            raw = _fixed_raw(e.value, e.key)
+            if raw != e.value.raw:
+                what = "quoted wikilink" if raw.startswith('"[[') else "unquoted date"
+                changes.append(f"{what} in '{e.key}'")
+            out.append(f"{e.key}: {raw}")
+        else:
+            if e.kind == "inline":
+                changes.append(f"converted inline list '{e.key}' to block list")
+            out.append(f"{e.key}:")
+            for it in e.items:
+                raw = _fixed_raw(it, e.key)
+                if raw != it.raw and e.kind != "inline":
+                    changes.append(f"quoted wikilink in '{e.key}'")
+                out.append(f"  - {raw}")
+    out.append("---")
+    return "\n".join(out) + "\n", changes
+
+
+def atomic_write(path: Path, data: str, expect: Optional[bytes] = None) -> bool:
+    """Write via a temp file + fsync + rename in the same folder, keeping the
+    mode. With `expect`, give up (return False) if the file no longer holds
+    those bytes, so a concurrent edit is never clobbered."""
+    if path.is_symlink():
+        return False
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".vault-lint-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
+            fh.write(data)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.chmod(tmp, os.stat(path).st_mode & 0o7777)
+        if expect is not None and path.read_bytes() != expect:
+            os.unlink(tmp)
+            return False
+        os.replace(tmp, path)
+        return True
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+
+
+def fixed_text(n: Note) -> tuple:
+    """(new file text | None, [changes]) for one note; None when nothing to do."""
+    head = n.text[: n.fm.body_offset]
+    new_head, changes = render_frontmatter(n)
+    if not head.endswith("\n"):          # file ends right after the closing ---
+        new_head = new_head[:-1]
+    if n.crlf:
+        raw_lines = n.raw.split("\n")
+        head_lines = raw_lines[: n.fm.end_line]
+        if not all(l.endswith("\r") for l in head_lines[: len(head_lines) - (0 if head.endswith("\n") else 1)]):
+            return None, []                 # mixed line endings in the frontmatter: hands off
+        raw_head_len = sum(len(l) + 1 for l in head_lines) - (0 if head.endswith("\n") else 1)
+        body = n.raw[raw_head_len:]
+        new_head = new_head.replace("\n", "\r\n")
+        head = n.raw[:raw_head_len]
+    else:
+        body = n.text[n.fm.body_offset:]
+        if _formattable(n):
+            new_body, fchanges = format_body(body)
+            if new_body != body:
+                body = new_body
+                changes = changes + ["body: " + c for c in fchanges]
+    if n.bom:
+        changes.append("removed UTF-8 byte-order mark")
+    if new_head == head and not n.bom and not any(c.startswith("body: ") for c in changes):
+        return None, []
+    if not changes:
+        changes = ["normalised frontmatter layout (blank lines / list indent)"]
+    return new_head + body, list(dict.fromkeys(changes))
+
+
+def apply_fixes(v: Vault, selected: Optional[set]) -> list:
+    """Rewrite frontmatter of fixable notes. Returns [(rel, [changes])].
+    Body bytes (including their line endings) are never changed."""
+    report = []
+    for n in sorted(v.notes.values(), key=lambda n: n.rel):
+        if not n.fm or not n.is_note or (selected is not None and not _selected(n.rel, selected)):
+            continue
+        if n.fm.unsafe or not n.fixable_file:
+            continue
+        data, changes = fixed_text(n)
+        if data is None:
+            continue
+        original = (("\ufeff" if n.bom else "") + n.raw).encode("utf-8")
+        if atomic_write(v.root / n.rel, data, expect=original):
+            report.append((n.rel, changes))
+        else:
+            report.append((n.rel, ["skipped: file changed on disk while fixing; run --fix again"]))
+    return report
+
+
+# --------------------------------------------------------------------------
+# --archive-closed and --promote: the mechanical GTD steps
+# --------------------------------------------------------------------------
+
+def _write_new(path: Path, data: str, mode: int) -> bool:
+    """Create `path` with `data` atomically; False (nothing written) if it exists."""
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".vault-lint-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
+            fh.write(data)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.chmod(tmp, mode)
+        try:
+            os.link(tmp, path)             # fails if the name is taken: never clobbers
+        except FileExistsError:
+            return False
+        return True
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def _on_disk(n: Note) -> bytes:
+    return (("﻿" if n.bom else "") + n.raw).encode("utf-8")
+
+
+def _skip_reason(v: Vault, n: Note) -> Optional[str]:
+    if n.fm.unsafe or not n.fixable_file:
+        return "frontmatter outside the subset, or unreadable; fix by hand"
+    if (v.root / n.rel).is_symlink():
+        return "symlink"
+    return None
+
+
+def archive_closed(v: Vault, selected: Optional[set], dry: bool) -> dict:
+    """Agents/procedures.md, "Archive a file", for every closed task still in
+    Tasks/: set `completed` (today, when missing), add `archived: true` and
+    `archived_from: Tasks`, move to Archive/ under the same filename. Closed
+    projects are left alone: archiving one means sorting its Resources."""
+    moved, skipped, left = [], [], []
+    for p in sorted(v.content_notes("Projects"), key=lambda n: n.rel):
+        if p.fm and p.state in CLOSED and (selected is None or _selected(p.rel, selected)):
+            left.append(p.rel)
+    tail = {k for k, _ in COMMON_TAIL}
+    for n in sorted(v.content_notes("Tasks"), key=lambda n: n.rel):
+        if not n.fm or n.fm.scalar("status") not in CLOSED:
+            continue
+        if selected is not None and not _selected(n.rel, selected):
+            continue
+        dest = v.root / "Archive" / f"{n.stem}.md"
+        why = _skip_reason(v, n)
+        if not why and (n.fm.get("archived") or n.fm.get("archived_from")):
+            why = "already has archived fields"
+        if not why and (dest.exists() or len(v.by_stem.get(n.stem.lower(), [])) > 1):
+            why = "Archive/ or another folder already holds that filename"
+        if why:
+            skipped.append((n.rel, why))
+            continue
+        eol = "\r" if n.crlf else ""
+        lines = n.raw.split("\n")
+        at = next((e.line - 1 for e in n.fm.entries if e.key in tail), n.fm.end_line - 1)
+        add = []
+        set_completed = n.fm.get("completed") is None
+        if set_completed:
+            add.append(f"completed: {v.today.isoformat()}")
+        add += ["archived: true", "archived_from: Tasks"]
+        lines[at:at] = [a + eol for a in add]
+        item = {"from": n.rel, "to": f"Archive/{n.stem}.md", "completed_set": set_completed,
+                "project": next((link_target(x) for x in n.fm.values("project") if link_target(x)), None)}
+        if dry:
+            moved.append(item)
+            continue
+        data = ("﻿" if n.bom else "") + "\n".join(lines)
+        src = v.root / n.rel
+        mode = os.stat(src).st_mode & 0o7777
+        if not _write_new(dest, data, mode):
+            skipped.append((n.rel, "Archive/ already holds that filename"))
+            continue
+        if src.read_bytes() != _on_disk(n):         # edited while we worked: undo, touch nothing
+            dest.unlink()
+            skipped.append((n.rel, "file changed on disk while archiving; run again"))
+            continue
+        src.unlink()
+        moved.append(item)
+    return {"moved": moved, "skipped": skipped, "projects_left": left}
+
+
+def _promotion_key(t: Note) -> tuple:
+    """Agents/gtd.md, Promote on close: highest priority, then earliest due,
+    then oldest created."""
+    fm = t.fm
+    return (PRIORITY_RANK.get(fm.scalar("priority"), 2), fm.scalar("due") or "9999",
+            fm.scalar("created") or "9999", t.stem)
+
+
+def promotion_plan(v: Vault) -> list:
+    """One entry per active project that has no next action (`not-started`,
+    `in-progress`): the queued task to promote (all blockers closed, best by
+    _promotion_key), or None when the project has none."""
+    by_proj = _tasks_for_projects(v)
+    plan = []
+    for p in sorted(v.content_notes("Projects"), key=lambda n: n.rel):
+        status = p.state
+        if status not in PROJECT_NEXT_ACTIONS or PROJECT_NEXT_ACTIONS[status][0] < 1:
+            continue
+        ts = [t for t in by_proj.get(p.rel, []) if t.fm]
+        if any(t.fm.scalar("status") == "next-action" for t in ts):
+            continue
+        ready = []
+        for t in ts:
+            if t.fm.scalar("status") != "queued":
+                continue
+            blockers = [link_target(x) for x in t.fm.values("blocked_by") if link_target(x)]
+            if all(_is_closed(v, b, t.rel) for b in blockers):
+                ready.append(t)
+        plan.append({"project": p, "task": min(ready, key=_promotion_key) if ready else None})
+    return plan
+
+
+def promote(v: Vault, selected: Optional[set], dry: bool) -> dict:
+    """Agents/gtd.md, Promote on close: each active project with no next
+    action gets its best queued, unblocked task set to `next-action`. Existing
+    `contexts` stay; none are guessed, so a task without them is reported."""
+    promoted, skipped, stuck = [], [], []
+    for item in promotion_plan(v):
+        p, t = item["project"], item["task"]
+        if selected is not None and not (_selected(p.rel, selected) or (t and _selected(t.rel, selected))):
+            continue
+        if t is None:
+            stuck.append(p.stem)
+            continue
+        why = _skip_reason(v, t)
+        status = t.fm.get("status")
+        eol = "\r" if t.crlf else ""
+        lines = t.raw.split("\n")
+        if not why and (not status or lines[status.line - 1].rstrip("\r").strip() != "status: queued"):
+            why = "status line isn't plain `status: queued`"
+        if why:
+            skipped.append((t.rel, why))
+            continue
+        rec = {"task": t.stem, "path": t.rel, "project": p.stem, "needs_contexts": not t.fm.values("contexts")}
+        if dry:
+            promoted.append(rec)
+            continue
+        lines[status.line - 1] = "status: next-action" + eol
+        src = v.root / t.rel
+        if not atomic_write(src, ("﻿" if t.bom else "") + "\n".join(lines), expect=_on_disk(t)):
+            skipped.append((t.rel, "file changed on disk while promoting; run again"))
+            continue
+        promoted.append(rec)
+    return {"promoted": promoted, "skipped": skipped, "no_candidate": stuck}
+
+
+def print_archive_report(r: dict, dry: bool, out) -> None:
+    w = "would archive" if dry else "archived"
+    for m in r["moved"]:
+        extra = f" (completed set to today)" if m["completed_set"] else ""
+        out.write(f"{w} {m['from']} -> {m['to']}{extra}\n")
+    for rel, why in r["skipped"]:
+        out.write(f"skipped {rel}: {why}\n")
+    for rel in r["projects_left"]:
+        out.write(f"left for an agent: {rel} (closed project; archiving sorts its tasks and Resources)\n")
+    out.write(f"--archive-closed: {len(r['moved'])} task(s) {'would be ' if dry else ''}archived\n")
+
+
+def print_promote_report(r: dict, dry: bool, out) -> None:
+    w = "would promote" if dry else "promoted"
+    for m in r["promoted"]:
+        out.write(f"{w} {m['path']} to next-action, project {m['project']}"
+                  + ("; needs contexts (agent)" if m["needs_contexts"] else "") + "\n")
+    for rel, why in r["skipped"]:
+        out.write(f"skipped {rel}: {why}\n")
+    for slug in r["no_candidate"]:
+        out.write(f"left for an agent: {slug} has no next action and no queued task ready "
+                  "(write one from the project body, or change its phase)\n")
+    out.write(f"--promote: {len(r['promoted'])} task(s) {'would be ' if dry else ''}promoted\n")
+
+
+# --------------------------------------------------------------------------
+# --review: the GTD daily/weekly review as text, for agents without Dataview
+# --------------------------------------------------------------------------
+
+PRIORITY_RANK = {"urgent": 0, "high": 1, "med": 2, "low": 3}
+STALE_DAYS = 14
+WAITING_STALE_DAYS = 7
+
+
+def _git_last_changes(root: Path) -> Optional[dict]:
+    """rel -> last commit date (uncommitted changes count as today's date
+    marker None). Returns None when root isn't the top of a git work tree."""
+    import subprocess
+    try:
+        top = subprocess.run(["git", "-C", str(root), "rev-parse", "--show-toplevel"],
+                             capture_output=True, text=True, timeout=10)
+        if top.returncode != 0 or Path(top.stdout.strip()).resolve() != root:
+            return None
+        log = subprocess.run(["git", "-C", str(root), "-c", "core.quotepath=off", "log",
+                              "--format=%x00%cs", "--name-only", "--", "Tasks", "Projects", "Archive"],
+                             capture_output=True, text=True, timeout=30)
+        dirty = subprocess.run(["git", "-C", str(root), "-c", "core.quotepath=off", "status",
+                                "--porcelain", "--", "Tasks", "Projects", "Archive"],
+                               capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if log.returncode != 0:
+        return None
+    out: dict = {}
+    date = None
+    for line in log.stdout.split("\n"):
+        if line.startswith("\x00"):
+            date = parse_date(line[1:].strip())
+        elif line.strip() and date:
+            out.setdefault(line.strip(), date)
+    for line in dirty.stdout.split("\n"):
+        if len(line) > 3:
+            out[line[3:].split(" -> ")[-1].strip('"')] = "dirty"
+    return out
+
+
+def _brief(n: Note) -> dict:
+    fm = n.fm
+    d = {"path": n.rel, "slug": n.stem, "title": n.title or n.stem, "status": n.state}
+    for k in ("due", "priority", "waiting_since", "created"):
+        if fm.scalar(k):
+            d[k] = fm.scalar(k)
+    for k in ("project", "waiting_on"):
+        t = next((link_target(x) for x in fm.values(k) if link_target(x)), None)
+        if t:
+            d[k] = t
+    for k in ("area", "contexts", "blocked_by"):
+        vals = [link_target(x) or x.text for x in fm.values(k)]
+        if vals:
+            d[k] = vals
+    return d
+
+
+def _is_closed(v: Vault, target: str, source: str) -> bool:
+    rel = v.resolve(target, source)
+    n = v.notes.get(rel) if rel else None
+    if not n or not n.fm:
+        return False
+    return n.folder == "Archive" or n.state in CLOSED
+
+
+def _task_sort_key(d: dict):
+    return (d.get("due") or "9999", PRIORITY_RANK.get(d.get("priority"), 2), d.get("created") or "", d["slug"])
+
+
+def build_review(v: Vault, days: int = 7, use_git: bool = True) -> dict:
+    today = v.today
+    tasks = [t for t in v.content_notes("Tasks") if t.fm]
+    projects = [p for p in v.content_notes("Projects") if p.fm]
+    open_tasks = [t for t in tasks if t.fm.scalar("status") in OPEN_TASK]
+    findings = run_checks(v, None)
+    r: dict = {"today": today.isoformat(), "days": days,
+               "lint": {"errors": sum(f.severity == ERROR for f in findings),
+                        "warnings": sum(f.severity == WARNING for f in findings)}}
+
+    # Overdue and due soon (open tasks and active projects)
+    due = []
+    for n in open_tasks + [p for p in projects if p.state in ACTIVE_PROJECT]:
+        d = parse_date(n.fm.scalar("due") or "")
+        if d and d <= today + dt.timedelta(days=days):
+            b = _brief(n)
+            b["kind"] = "project" if n.folder == "Projects" else "task"
+            b["days_left"] = (d - today).days
+            b["overdue"] = d < today
+            due.append(b)
+    r["due"] = sorted(due, key=_task_sort_key)
+
+    # Next actions by project and by context
+    nexts = sorted((_brief(t) for t in open_tasks if t.fm.scalar("status") == "next-action"), key=_task_sort_key)
+    by_project: dict = {}
+    by_context: dict = {}
+    for b in nexts:
+        by_project.setdefault(b.get("project") or "", []).append(b)
+        for c in b.get("contexts") or [""]:
+            by_context.setdefault(c, []).append(b)
+    r["next_actions_by_project"] = {k: by_project[k] for k in sorted(by_project, key=lambda k: (k == "", k))}
+    r["next_actions_by_context"] = {k: by_context[k] for k in sorted(by_context, key=lambda k: (k == "", k))}
+
+    # Inbox
+    inbox = [t for t in open_tasks if t.fm.scalar("status") == "inbox"]
+    r["inbox"] = sorted((_brief(t) for t in inbox), key=lambda b: (b.get("created") or "", b["slug"]))
+    r["queued_steps"] = sum(1 for t in open_tasks if t.fm.scalar("status") == "queued")
+
+    # Waiting for
+    waiting = []
+    for t in open_tasks:
+        if t.fm.scalar("status") != "waiting-for":
+            continue
+        b = _brief(t)
+        since = parse_date(t.fm.scalar("waiting_since") or "")
+        b["age_days"] = (today - since).days if since else None
+        b["stale"] = b["age_days"] is None or b["age_days"] >= WAITING_STALE_DAYS
+        waiting.append(b)
+    r["waiting"] = sorted(waiting, key=lambda b: (-(b["age_days"] if b["age_days"] is not None else 10**6), b["slug"]))
+
+    # Blocked tasks whose blockers are all closed
+    promote = []
+    for t in open_tasks:
+        if t.fm.scalar("status") not in ("inbox", "queued"):
+            continue
+        blockers = [link_target(x) for x in t.fm.values("blocked_by") if link_target(x)]
+        unblocked = all(_is_closed(v, b, t.rel) for b in blockers)
+        if blockers and unblocked:
+            promote.append(_brief(t))
+    r["promote"] = sorted(promote, key=_task_sort_key)
+
+    # Projects breaking the one-next-action rule
+    by_proj = _tasks_for_projects(v)
+    to_promote = {x["project"].rel: x["task"].stem for x in promotion_plan(v) if x["task"]}
+    rule = []
+    for p in sorted(projects, key=lambda p: p.stem):
+        status = p.state
+        if status not in PROJECT_NEXT_ACTIONS:
+            continue
+        ts = [t for t in by_proj.get(p.rel, []) if t.folder == "Tasks"]
+        n_next = [t.stem for t in ts if t.fm.scalar("status") == "next-action"]
+        n_wait = [t.stem for t in ts if t.fm.scalar("status") == "waiting-for"]
+        lo, hi = PROJECT_NEXT_ACTIONS[status]
+        problem = None
+        if lo == 1 and not n_next:
+            problem = "no next action"
+        elif hi is not None and len(n_next) > hi:
+            problem = f"{len(n_next)} next actions (allowed {hi})"
+        elif status == "waiting" and not n_wait:
+            problem = "waiting project with no waiting-for task"
+        if problem:
+            item = {"path": p.rel, "slug": p.stem, "title": p.title or p.stem, "phase": status,
+                    "problem": problem, "next_actions": n_next}
+            if lo == 1 and not n_next and p.rel in to_promote:
+                item["promote"] = to_promote[p.rel]
+            rule.append(item)
+    r["project_rule"] = rule
+
+    # Stale in-progress projects
+    changes = _git_last_changes(v.root) if use_git else None
+    source = "git" if changes is not None else "mtime"
+
+    def last_change(rel: str) -> Optional[dt.date]:
+        if changes is not None:
+            d = changes.get(rel)
+            return today if d == "dirty" else d
+        try:
+            return dt.date.fromtimestamp((v.root / rel).stat().st_mtime)
+        except OSError:
+            return None
+
+    archived_by_proj: dict = {}
+    for t in v.content_notes("Archive"):
+        for val in (t.fm.values("project") if t.fm else []):
+            rel = v.resolve(link_target(val) or "", t.rel)
+            if rel:
+                archived_by_proj.setdefault(rel, []).append(t)
+    stale = []
+    for p in projects:
+        if p.state != "in-progress":
+            continue
+        members = by_proj.get(p.rel, []) + archived_by_proj.get(p.rel, [])
+        rels = [t.rel for t in members] or [p.rel]
+        dates = [d for d in (last_change(x) for x in rels) if d]
+        last = max(dates) if dates else None
+        age = (today - last).days if last else None
+        if age is None or age >= STALE_DAYS:
+            stale.append({"path": p.rel, "slug": p.stem, "title": p.title or p.stem,
+                          "last_change": last.isoformat() if last else None, "age_days": age,
+                          "tasks": len(members)})
+    r["stale_projects"] = {"source": source, "items": sorted(stale, key=lambda x: x["slug"])}
+
+    # Closed but not archived
+    r["closed_not_archived"] = [
+        {"path": n.rel, "slug": n.stem, "title": n.title or n.stem, "status": n.state,
+         "completed": n.fm.scalar("completed")}
+        for n in sorted(tasks + projects, key=lambda n: n.rel) if n.state in CLOSED]
+
+    # Someday/maybe ticklers
+    revisit = []
+    for a in sorted(v.content_notes("Areas"), key=lambda n: n.rel):
+        sec = sections(a).get("Someday/maybe")
+        if not sec:
+            continue
+        for i, line in enumerate(sec[1]):
+            for m in REVISIT.finditer(line):
+                d = parse_date(m.group(1).strip())
+                if d and d <= today:
+                    text = re.sub(r"^\s*[-*]\s+", "", REVISIT.sub("", line)).strip()
+                    revisit.append({"path": a.rel, "area": a.stem, "line": sec[0] + 1 + i,
+                                    "revisit": d.isoformat(), "text": text})
+    r["revisit"] = sorted(revisit, key=lambda x: (x["revisit"], x["area"]))
+    return r
+
+
+def _fmt_task(b: dict, show_project: bool = True) -> str:
+    bits = []
+    if b.get("contexts"):
+        bits.append(", ".join(b["contexts"]))
+    if b.get("due"):
+        bits.append(f"due {b['due']}")
+    if b.get("priority"):
+        bits.append(b["priority"])
+    if show_project and b.get("project"):
+        bits.append(f"project [[{b['project']}]]")
+    elif show_project and b.get("area"):
+        bits.append("area " + ", ".join(f"[[{a}]]" for a in b["area"]))
+    tail = f" ({'; '.join(bits)})" if bits else ""
+    return f"[[{b['slug']}]] {b['title']}{tail}"
+
+
+def render_review(r: dict) -> str:
+    out = [f"# GTD review, {r['today']}", ""]
+    lint = r["lint"]
+    out += [f"Lint: {lint['errors']} error(s), {lint['warnings']} warning(s). "
+            "Run `python3 .scripts/vault-lint` for details.", ""]
+
+    def section(title, items, fmt, empty="None."):
+        out.append(f"## {title}")
+        out.append("")
+        out.extend(fmt(x) for x in items) if items else out.append(empty)
+        out.append("")
+
+    def due_line(b):
+        when = (f"OVERDUE {-b['days_left']}d" if b["overdue"]
+                else "due today" if b["days_left"] == 0 else f"in {b['days_left']}d")
+        kind = " [project]" if b["kind"] == "project" else ""
+        return f"- **{when}**{kind} {_fmt_task(b)}, {b['status']}"
+    section(f"Overdue and due within {r['days']} days", r["due"], due_line)
+
+    out += ["## Next actions by project", ""]
+    if not r["next_actions_by_project"]:
+        out += ["None.", ""]
+    for proj, items in r["next_actions_by_project"].items():
+        out.append(f"### {'[[' + proj + ']]' if proj else 'No project (area only)'}")
+        out.extend(f"- {_fmt_task(b, show_project=not proj)}" for b in items)
+        out.append("")
+
+    out += ["## Next actions by context", ""]
+    if not r["next_actions_by_context"]:
+        out += ["None.", ""]
+    for ctx, items in r["next_actions_by_context"].items():
+        out.append(f"### {ctx or 'No context set'}")
+        out.extend(f"- {_fmt_task(b)}" for b in items)
+        out.append("")
+
+    section(f"Inbox captures to clarify ({len(r['inbox'])})", r["inbox"],
+            lambda b: f"- {_fmt_task(b)}" + (f", captured {b['created']}" if b.get("created") else ""))
+    out.insert(len(out) - 1, f"Plus {r['queued_steps']} queued project step(s).")
+
+    def wait_line(b):
+        age = "no waiting_since" if b["age_days"] is None else f"{b['age_days']}d"
+        flag = " **chase, wait, or drop?**" if b["stale"] else ""
+        on = f" on [[{b['waiting_on']}]]" if b.get("waiting_on") else ""
+        since = f" since {b['waiting_since']}" if b.get("waiting_since") else ""
+        return f"- {age}: [[{b['slug']}]] {b['title']}, waiting{on}{since}{flag}"
+    section("Waiting for", r["waiting"], wait_line)
+
+    def rule_line(x):
+        s = f"- [[{x['slug']}]] ({x['phase']}): {x['problem']}"
+        if x["next_actions"]:
+            s += " — " + ", ".join(f"[[{t}]]" for t in x["next_actions"])
+        if x.get("promote"):
+            s += f". Promote [[{x['promote']}]]"
+        return s
+    section("Projects breaking the next-action rule", r["project_rule"], rule_line)
+
+    section("Blocked tasks ready to promote (all blockers closed)", r["promote"],
+            lambda b: f"- {_fmt_task(b)}; was blocked by " + ", ".join(f"[[{x}]]" for x in b["blocked_by"]))
+
+    st = r["stale_projects"]
+    section(f"Stale in-progress projects (no task change in {STALE_DAYS}+ days, from {st['source']})",
+            st["items"], lambda x: f"- [[{x['slug']}]] {x['title']}: last change "
+            + (f"{x['last_change']} ({x['age_days']}d ago)" if x["last_change"] else "unknown")
+            + f", {x['tasks']} task(s). Still active?")
+
+    section("Closed but not archived", r["closed_not_archived"],
+            lambda x: f"- {x['path']} ({x['status']}" + (f", completed {x['completed']})" if x["completed"] else ", no completed date)"))
+
+    section("Someday/maybe revisits due", r["revisit"],
+            lambda x: f"- [[{x['area']}]] (revisit {x['revisit']}): {x['text']}")
+    return "\n".join(out).rstrip() + "\n"
+
+
+# --------------------------------------------------------------------------
+# CLI
+# --------------------------------------------------------------------------
+
+def _selected(rel: str, selected: set) -> bool:
+    return any(rel == s or rel.startswith(s.rstrip("/") + "/") for s in selected)
+
+
+def run_checks(v: Vault, only: Optional[list]) -> list:
+    findings = []
+    for cid, (_, fn) in CHECKS.items():
+        if (only and cid not in only) or check_off(cid, v.cfg):
+            continue
+        findings.extend(fn(v))
+    findings.sort(key=lambda f: (list(CHECKS).index(f.check), f.path, f.line, SEVERITY_RANK[f.severity]))
+    return findings
+
+
+def print_human(findings: list, quiet: bool, out=sys.stdout):
+    shown = [f for f in findings if not quiet or f.severity == ERROR]
+    current = None
+    for f in shown:
+        if f.check != current:
+            current = f.check
+            out.write(f"\n== {f.check}\n")
+        loc = f"{f.path}:{f.line}" if f.line else f.path
+        fix = " [fixable]" if f.fixable else ""
+        out.write(f"{loc}: {f.severity}: {f.message}{fix}\n")
+    out.write("\nSummary\n")
+    out.write(f"  {'check':<22}{'error':>7}{'warning':>9}{'info':>7}\n")
+    tot = {ERROR: 0, WARNING: 0, INFO: 0}
+    for cid in CHECKS:
+        c = {s: sum(1 for f in findings if f.check == cid and f.severity == s) for s in tot}
+        for s in tot:
+            tot[s] += c[s]
+        if any(c.values()):
+            out.write(f"  {cid:<22}{c[ERROR]:>7}{c[WARNING]:>9}{c[INFO]:>7}\n")
+    out.write(f"  {'total':<22}{tot[ERROR]:>7}{tot[WARNING]:>9}{tot[INFO]:>7}\n")
+    fixable = sum(1 for f in findings if f.fixable)
+    if fixable:
+        out.write(f"  {fixable} finding(s) fixable with --fix\n")
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(prog="vault-lint", description=__doc__.split("\n\n")[0],
+                                 epilog=__doc__.split("\n\n", 1)[1],
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("paths", nargs="*")
+    ap.add_argument("--fix", action="store_true")
+    ap.add_argument("--json", action="store_true")
+    ap.add_argument("--only")
+    ap.add_argument("--quiet", action="store_true")
+    ap.add_argument("--root", default=str(Path(__file__).resolve().parent.parent))
+    ap.add_argument("--today")
+    ap.add_argument("--list-checks", action="store_true")
+    ap.add_argument("--review", action="store_true")
+    ap.add_argument("--days", type=int, default=7)
+    ap.add_argument("--no-git", action="store_true")
+    ap.add_argument("--archive-closed", action="store_true")
+    ap.add_argument("--promote", action="store_true")
+    ap.add_argument("--dry-run", action="store_true")
+    a = ap.parse_args(argv)
+
+    if a.list_checks:
+        cfg = load_config(Path(a.root).resolve())
+        for cid, (desc, _) in CHECKS.items():
+            off = check_off(cid, cfg)
+            print(f"{cid:<22}{desc}" + (f" (off: {off})" if off else ""))
+        return 0
+    only = [c.strip() for c in a.only.split(",")] if a.only else None
+    global HASH_MANIFEST
+    HASH_MANIFEST = only == ["manifest"]
+    if only:
+        bad = [c for c in only if c not in CHECKS]
+        if bad:
+            print(f"vault-lint: unknown check(s): {', '.join(bad)}; see --list-checks", file=sys.stderr)
+            return 2
+    root = Path(a.root).resolve()
+    try:
+        today = dt.date.fromisoformat(a.today) if a.today else dt.date.today()
+    except ValueError:
+        print(f"vault-lint: --today must be YYYY-MM-DD, got {a.today}", file=sys.stderr)
+        return 2
+    acts = a.archive_closed or a.promote
+    if a.dry_run and not acts:
+        print("vault-lint: --dry-run goes with --archive-closed or --promote", file=sys.stderr)
+        return 2
+    if acts and (a.review or a.only):
+        print("vault-lint: --archive-closed and --promote take no --review or --only", file=sys.stderr)
+        return 2
+    if a.review:
+        if a.fix or a.only or a.paths:
+            print("vault-lint: --review takes no paths, --fix or --only", file=sys.stderr)
+            return 2
+        r = build_review(Vault(root, today), a.days, use_git=not a.no_git)
+        if a.json:
+            json.dump(r, sys.stdout, indent=1, ensure_ascii=False)
+            sys.stdout.write("\n")
+        else:
+            sys.stdout.write(render_review(r))
+        return 0
+    selected = None
+    if a.paths:
+        selected = set()
+        for p in a.paths:
+            ap_ = Path(p)
+            ap_ = ap_.resolve() if ap_.is_absolute() or ap_.exists() else (root / p).resolve()
+            try:
+                selected.add(str(ap_.relative_to(root)).replace(os.sep, "/").rstrip("/") or ".")
+            except ValueError:
+                print(f"vault-lint: {p} is outside the vault {root}", file=sys.stderr)
+                return 2
+        if "." in selected:
+            selected = None
+
+    vault = Vault(root, today)
+    if acts:
+        stream = sys.stderr if a.json else sys.stdout
+        moved_to = []
+        if a.archive_closed:
+            r_ = archive_closed(vault, selected, a.dry_run)
+            print_archive_report(r_, a.dry_run, stream)
+            moved_to = [m["to"] for m in r_["moved"]]
+            if r_["moved"] and not a.dry_run:
+                vault = Vault(root, today)   # the next step sees the moved files
+        if a.promote:
+            r_ = promote(vault, selected, a.dry_run)
+            print_promote_report(r_, a.dry_run, stream)
+            if r_["promoted"] and not a.dry_run:
+                moved_to += [m["path"] for m in r_["promoted"]]
+                vault = Vault(root, today)
+        if a.dry_run:
+            return 0
+        if moved_to:                             # key order and layout of what we wrote
+            for rel, changes in apply_fixes(vault, set(moved_to)):
+                stream.write(f"fixed {rel}: {'; '.join(changes)}\n")
+            vault = Vault(root, today)
+    if a.fix:
+        report = apply_fixes(vault, selected)
+        stream = sys.stderr if a.json else sys.stdout
+        changed = [r_ for r_ in report if not r_[1][0].startswith("skipped")]
+        for rel, changes in report:
+            verb = "skipped" if changes[0].startswith("skipped") else "fixed"
+            stream.write(f"{verb} {rel}: {'; '.join(changes)}\n")
+        stream.write(f"--fix: {len(changed)} file(s) changed\n")
+        if report:
+            vault = Vault(root, today)
+
+    findings = run_checks(vault, only)
+    if selected is not None:
+        findings = [f for f in findings if _selected(f.path.rstrip("/"), selected)]
+    if a.json:
+        json.dump([f.as_dict() for f in findings], sys.stdout, indent=1, ensure_ascii=False)
+        sys.stdout.write("\n")
+    else:
+        print_human(findings, a.quiet)
+    return 1 if any(f.severity == ERROR for f in findings) else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

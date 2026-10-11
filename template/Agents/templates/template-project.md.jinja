@@ -1,0 +1,43 @@
+---
+title: Project template
+type: template
+---
+# Project template
+
+Part of the [[README]]. Skeleton for a new Project in `Projects/`. Rules: [[gtd]], [[schema]], [[body-sections]].
+
+**Using it:** [[= owner =]] creates a new file in `Projects/`, and Templater fills it. Agents copy it by hand and save it as `Projects/<slug>.md`. Both, in detail: [[template-task]]. Then:
+
+- Add `area:` (a list, at least one) — required.
+- Replace the first body line with the outcome: what "done" looks like.
+- Create the first next action as a task with `project` pointing here, in the same change. A `not-started` project has at least one; queue later steps as `queued` tasks.
+- Use `phase: planned` instead if the project starts later; say when in the body.
+- Optional fields: [[schema]] (`due` only for hard deadlines).
+
+<%*
+tR = "";
+let title = tp.file.title;
+if (title.startsWith("Untitled")) title = await tp.system.prompt("Project title (sentence case, names the outcome)");
+const slug = title.normalize("NFKD").replace(/[^\x00-\x7F]/g, "").toLowerCase().replace(/'/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+await tp.file.move("Projects/" + slug);
+-%>
+---
+title: <% title %>
+phase: not-started
+created: <% tp.date.now("YYYY-MM-DD") %>
+---
+# <% title %>
+
+Done when: (the finished state, in one sentence).
+
+## Status
+
+Not swept yet.
+
+## Tasks
+
+```dataviewjs
+await dv.view("Agents/views/task-status")
+```
+
+## Notes

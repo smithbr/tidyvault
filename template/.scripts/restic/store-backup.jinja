@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Back up the file store ([[= store_path =]]), apply retention, and spot-check
+# stored data. Runs nightly from launchd (macOS) or cron (Linux); see install.sh.
+set -euo pipefail
+
+vault_restic="$(dirname -- "${BASH_SOURCE[0]}")/vault-restic"
+cfg="${VAULT_RESTIC_CONFIG:-${HOME}/.config/restic}"
+# shellcheck source=/dev/null
+. "${cfg}/[[= vault =]].env"
+
+store="${VAULT_FILES:-[[= store_path =]]}"
+store="${store/#\~/${HOME}}"
+image="${VAULT_FILES_IMAGE:-${store}.sparsebundle}"
+host="${BACKUP_HOST:-$(hostname -s)}"
+last_ok="${HOME}/.local/state/[[= vault =]]-store-backup.last-ok"
+stale_days=3
+
+if [[ ! -d "${store}" ]]; then
+    printf '%s: no file store at %s\n' "${0##*/}" "${store}" >&2
+    exit 1
+fi
+
+printf '== %s\n' "$(date '+%Y-%m-%d %H:%M:%S')"
+
+# When the store is an encrypted disk image (store-image), the folder is empty
+# while the image is locked, and backing it up would let retention drop the
+# real snapshots, so skip. Mounted means a different device from its parent.
+if [[ -e "${image}" ]] && [[ "$(stat -f %d "${store}")" == "$(stat -f %d "${store}/..")" ]]; then
+    printf 'skipped: disk image not mounted at %s\n' "${store}"
+    if [[ ! -f "${last_ok}" ]] || [[ -n "$(find "${last_ok}" -mtime "+${stale_days}")" ]]; then
+        msg="No file store backup in over ${stale_days} days: unlock it with store-image unlock"
+        printf '%s\n' "${msg}" >&2
+        osascript -e "display notification \"${msg}\" with title \"[[= vault =]] store-backup\"" 2>/dev/null || true
+        exit 1
+    fi
+    exit 0
+fi
+
+"${vault_restic}" --store backup "${store}" --tag store --host "${host}" --exclude-caches \
+    --exclude "${store}/.fseventsd" --exclude "${store}/.Spotlight-V100" \
+    --exclude "${store}/.Trashes" --exclude "${store}/.TemporaryItems"
+"${vault_restic}" --store forget --tag store --host "${host}" \
+    --keep-daily "${KEEP_DAILY:-7}" --keep-weekly "${KEEP_WEEKLY:-4}" \
+    --keep-monthly "${KEEP_MONTHLY:-12}" --prune
+# Verify a sample of stored data each run.
+"${vault_restic}" --store check --read-data-subset="${CHECK_SUBSET:-5%}"
+mkdir -p "${last_ok%/*}"
+touch "${last_ok}"

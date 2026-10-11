@@ -1,0 +1,35 @@
+---
+title: PII register
+type: reference
+people:
+  - "[[[[= owner_slug =]]]]"
+sensitive: true
+created: [[= '%Y-%m-%d' | strftime =]]
+---
+# PII register
+
+The index of every PII key in the vault. **No values here.** Each value lives only in the password manager, in the document item **[[= vault =]] PII register**. Rules: [[sensitive-data]].
+
+## How to read a key
+
+`<person-slug>.<category>.<label>`, for example `theo-vale.contact.mobile`. In a note it appears as a link to that person's heading here, with a 🔒 in front.
+
+| Category | What it covers |
+|---|---|
+| `id` | National ID or tax numbers, passport, driver's license or state ID, member IDs |
+| `account` | Full bank, card, loan, policy, claim, or case numbers |
+| `credential` | Passwords, PINs, recovery or backup codes, security answers, API keys, a username paired with its site |
+| `contact` | A private person's phone or email; any full street address |
+| `dob` | Dates of birth |
+| `health` | Diagnoses, medications and doses, symptoms, test results, therapy or meeting content |
+| `legal` | Statements, custody or settlement terms beyond the outcome, police report detail, court and case numbers |
+| `intimate` | Sexual, confessional, or relationship-private content |
+
+## Queue
+
+Values waiting for the password manager: `pii-register-queue.md` in the private folder ([[sensitive-data]], The register and the stub).
+
+## [[= owner_full =]]
+
+| Key | Category | Where used |
+|---|---|---|

@@ -1,0 +1,61 @@
+---
+title: Strict rules
+type: manual
+---
+# Strict rules
+
+Part of the [[README]]. The non-negotiables. Each one is checkable; most are checked by `python3 .scripts/vault-lint`. Every rule has a stable ID: cite it as `[[strict-rules]] I1`, never by position. Invariants (`I`) change only with a major kit version; heuristics (`H`) with a minor one; module rules (`S`, `P`, `F`) exist only where their module is on. This vault's own rules are `L1`, `L2`, … in [[local-rules]], which the kit never touches.
+
+## Structure
+
+- **I1. The top level is this list.** Folders: `Tasks`, `Projects`, `Areas`, `Resources`, `People`, `Archive`, `Agents`, `_attachments`, `_tmp`, `_imports`, `_captures`[[%+ if store +%]], and `_files` (a git-ignored symlink to the file store: [[file-store]])[[%+ endif +%]]. Root files: `Home.md`, `AGENTS.md` (the only agent entrypoint; no per-tool copies), and `llms.txt`. Hidden dot-folders and dot-files (`.tidyvault.yml`, `.copier-answers.yml`) are tooling. Nothing else at the top level. What each holds: the map in `AGENTS.md`; rules in [[organization]]. Adding, renaming, or removing a top-level folder is allowed: in the same change, update this rule, the map in `AGENTS.md`, the layout constants in `.scripts/vault-lint`, and every other file that names the old path ([[procedures]], "Move or rename a folder"), with a line in [[changelog]].
+- **I2. Subfolders are allowed** inside any content folder, to group related files. A file in a subfolder keeps the schema of its top-level folder (`Resources/fitness/kettlebell-plan.md` is a Resource). In `Agents/`, `role-*` pages live in `Agents/roles/`, `template-*` templates in `Agents/templates/`, `log-*` run logs in `Agents/logs/`, and Dataview view scripts (`view.js`, `view.css`, the only non-note files outside the file store) in `Agents/views/<name>/` ([[body-sections]], Task status view). A subfolder groups; it never replaces a link, so a Resource still names its projects in `projects:`.
+- **I3. One file per item** (Task, Project, Area, Resource, or Person), in the folder for its type. `Resources/` is the default home for anything that is not a task, project, area, or person.
+- **I4. Filenames are unique across the whole vault**, subfolders included. Links resolve by filename, so `Resources/career.md` and `Areas/work/career.md` make `[[career]]` ambiguous. Moving a file between folders or subfolders never changes its filename.
+[[% if store %]]
+- **S1. Attachments live only in `<note-slug>/` folders** in the file store, `_files/<note-slug>/`, one per Task, Project, Area, Resource, or Person that embeds them, whatever their type or size; `_attachments/<note-slug>/` holds them only briefly, where the store isn't attached. **An imported file is kept once:** its filed copy is the original, recorded in `_attachments/_raw/manifest.tsv`. Never edit, re-save, or delete a file the manifest lists; renaming or moving it updates its row in the same change. `_attachments/_raw/` holds only originals that aren't filed. Never delete an original source file where it came from. An original moves only as listed in [[organization#Allowed moves]], which also names the one delete (a duplicate drop, once `cmp` confirms it's filed); beyond that, only an erasure [[= owner =]] asks for directly ([[role-vault-docs]], Erase mode). Details: [[organization]] (Attachments, Importing files, File store).
+[[% endif %]]
+
+## Naming
+
+- **I5. Sentence case** for every title.
+- **I6. Filename = slug of the title** (algorithm in [[naming-and-style]]). `title` = `# H1` exactly.
+- **H1. Task titles are 2–5 words, verb first.** Detail goes in the body.
+- **H2. No emoji** in titles, filenames, headings, or frontmatter. Emoji in body text are fine.
+- **H3. [[= owner =]] is "[[= owner =]]".** Agent-written text calls [[= owner =]] "[[= owner =]]", never he, she, or they ("you" is fine), and names no assistant or tool. Existing prose is left as written.
+
+## Frontmatter
+
+- **I7. Frontmatter matches [[schema]]:** only listed fields, only allowed values, listed key order, no empty keys, no retired fields (`lint.retired_fields` in `.tidyvault.yml` names this vault's own).
+- **I8. Wikilinks in frontmatter are double-quoted:** `project: "[[renovate-the-kitchen]]"`.
+- **H4. No review or edit stamps in frontmatter.** `agent_review` and `edited` are retired; `vault-lint --fix` deletes them. The last change of a page is its file modification time (`file.mtime` in Dataview) and git history; an agent's changes are its run log.
+
+## Links
+
+- **I9. Every link resolves.** No dangling `[[links]]`. Create the target or don't link.
+- **H5. Every task links what it needs.** A task that needs a Resource lists it in `resources:` in the same change that creates either one.
+
+## GTD
+
+- **I10. Every open task has a `project` or an `area`.**
+- **I11. Each `not-started` or `in-progress` project (its `phase`) has at least one `next-action` task;** `planned` and `waiting` projects have none ([[gtd]]). A task with an unfinished `blocked_by` is never `next-action`.
+- **H6. `due` only for hard deadlines.** Something breaks or costs money if it's missed.
+- **I12. Closed tasks and projects get `completed:` and move to `Archive/`** in the same change.
+
+## Safety
+
+- **H7. Search before creating.** Merge into the existing Task, Project, Area, Resource, or Person rather than making a near-duplicate.
+[[% if pii %]]
+- **P1. PII stays out of the notes.** A personal value (an ID, full account number, credential, private contact or street address, date of birth, or health, legal, or intimate detail) is replaced by a key, `[[pii-register#<Person>|🔒 <person-slug>.<category>.<label>]]`; the value lives only in the password-manager document "[[= vault =]] PII register". Never write a value into a note, log, report, or chat. A file with keys carries `sensitive: true`. Criteria, keys, and intake: [[sensitive-data]].
+[[% endif %]]
+- **H8. `.git/`[[%+ if obsidian +%]] and `.obsidian/`[[%+ endif +%]] may be changed when needed, without breaking anything.** Follow the safeguards in [[agent-protocol#Editing .obsidian and .git]] and verify afterwards.
+- **H9. Act, then report.** Every change, and every destructive change by name, goes in the report. Stop and ask only for the three cases in [[agent-protocol]].
+- **I13. Done means lint-clean.** Run `python3 .scripts/vault-lint` before and after. Leave no new errors.
+[[% if false_facts %]]
+- **F1. Banned claims stay out.** Before writing a fact about [[= owner =]] or anyone into a vault file, check [[false-facts]]. Never write a claim listed there, whatever the source says. When [[= owner =]] calls something false, add it there, with a Search regex so `vault-lint --only facts` catches it coming back, and remove it from live vault files in the same change. Applies to this vault only.
+[[% endif %]]
+
+## Writing
+
+- **H10. Fewest words that carry the fact.** Everything an agent writes (note bodies, task Details and Log lines, Status sections, run logs, reports, question tasks) follows [[naming-and-style#Be brief]]: fact first, no preamble or restating, one line per log entry, and its word caps.
+- **H11. Questions and decisions for [[= owner =]] go to Home, never stay in a log.** Every question, decision, or approval an agent needs from [[= owner =]] is filed as a question task the same run ([[gtd]], Questions for [[= owner =]]), the common place Home lists. Run logs and reports hold only the count and a link, never a "Decisions" or "Questions" list ([[agent-protocol]], The report).

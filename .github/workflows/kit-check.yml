@@ -1,0 +1,29 @@
+name: kit-check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv tool install copier
+      - name: kit-check with the private leak words
+        env:
+          LEAK_WORDS: ${{ secrets.LEAK_WORDS }}
+        run: |
+          printf '%s\n' "$LEAK_WORDS" > "$RUNNER_TEMP/leak.txt"
+          tests/kit-check "$RUNNER_TEMP/leak.txt"
+      - run: tests/update-check
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv tool install copier
+      - run: tests/kit-check

@@ -1,0 +1,67 @@
+# AGENTS.md — [[= vault =]] vault
+
+[[= owner =]]'s knowledge base: plain Markdown in Obsidian, PARA folders, GTD task language. This is the only agent entrypoint (Claude Code, Codex, Cursor, Copilot); the manual is in `Agents/`, starting at `Agents/README.md`. If this file and the manual differ, the manual wins. [[= owner =]]'s direct instruction overrides both. Built from tidyvault [[= _copier_answers._commit | default('dev') =]]; this file is kit-managed (`Agents/README.md`, Kit-managed pages): this vault's own rules go in `Agents/local/`.
+
+## Map
+
+| Path | Holds |
+|---|---|
+| `Tasks/` | One Task per action (`status`: inbox, queued, next-action, waiting-for, done, cancelled) |
+| `Projects/` | One Project per multi-step outcome (`phase`: planned, not-started, in-progress, waiting, done, cancelled) |
+| `Areas/` | Ongoing responsibilities; Someday/maybe lives here |
+| `Resources/` | Everything else worth keeping (default home) |
+| `People/` | One Person file per person, including [[= owner =]] (`[[= owner_slug =]]`) |
+| `Archive/` | Finished or retired Tasks, Projects, Areas, Resources, and People, same filenames |
+| `Agents/` | The manual, the frontmatter contract (`Agents/schema.md`), roles in `Agents/roles/`, templates in `Agents/templates/`, run logs in `Agents/logs/`, Dataview view scripts in `Agents/views/` |
+| `Agents/local/` | This vault's own rules (`local-rules.md`: L1, L2, …) and role additions, on top of the kit's. The kit never touches it |
+[[% if store %]]
+| `_attachments/` | `_raw/` only: each imported file kept once (the file itself is in the store, `_files/`); where each came from in `_attachments/_raw/manifest.tsv`; unfiled originals in `_attachments/_raw/` |
+| `_files/` | Symlink to the file store (`[[= store_path =]]`): every attachment, images included, in `_files/<note-slug>/`, kept out of sync and git. Rules: `Agents/organization.md` (File store) |
+[[% else %]]
+| `_attachments/` | Attachments, one `<note-slug>/` folder per note that embeds them; `_raw/` holds imported originals and `_attachments/_raw/manifest.tsv` says where each came from |
+[[% endif %]]
+| `_tmp/` | Agent scratch space. Never copy vault files there |
+| `_imports/` | Drop folder for foreign files (documents, images, exports). Anyone may add; only vault intake files them |
+| `_captures/` | Drop folder for capture notes (things noticed, to-dos, facts). Format, and the prompt to paste into an outside agent: `Agents/outside-agent-prompt.md`. Anyone may add; only vault intake files them |
+| `Home.md` | Dashboard |
+| `llms.txt` | Link index of the manual and tooling docs. Update it when an `Agents/` manual page is added, renamed, or removed |
+| `.scripts/` | Tooling: `vault-lint` and the role scripts[[%+ if backup +%]], restic backup scripts[[%+ endif +%]] (`.scripts/README.md`) |
+| `.tidyvault.yml`, `.copier-answers.yml` | Kit config: modules, owner, lint settings (`lint:` is this vault's to extend); Copier's answers. Change answers with `copier update`, not by hand |
+
+Rules for `_attachments/`, `_tmp/`, `_imports/`, and `_captures/`: `Agents/organization.md`. Changing the top level: `Agents/strict-rules.md` I1.
+
+## The loop
+
+Details and the report template: `Agents/agent-protocol.md`.
+
+1. **Orient.** Read `Agents/strict-rules.md` and `Agents/local/local-rules.md` (and your role page, below). Run `python3 .scripts/vault-lint` for a baseline.
+2. **Search before creating**, `Archive/` included.
+3. **Change.** Re-read each file right before writing it. Follow `Agents/schema.md`; start each new Task, Project, Area, Resource, or Person from `Agents/templates/template-*.md`.
+4. **Lint.** `python3 .scripts/vault-lint --fix <each file you changed>`, then `python3 .scripts/vault-lint`: no new errors.
+5. **Report** every change, every destructive change by path, decisions for [[= owner =]], and what the new work displaces.
+6. **Log.** When the run starts, write its heading in `Agents/logs/log-<agent>-YYYY-MM-DD.md`; when it ends, append the report there, ending with `### Checks`. A read-only run (nothing changed, in the vault or outside it) writes no log.
+
+## Roles
+
+When [[= owner =]]'s message names a role (just `vault-pm` is enough, or `/vault-pm` in Claude Code) or uses one of its phrases, read that role page right after `Agents/strict-rules.md` and follow it. The name alone, with no task, gets a greeting and a short rundown of the role, not work; how roles start, what they may write, and which run alone: `Agents/README.md` (Roles). Otherwise, work as a generalist under the whole manual.
+
+## Permissions
+
+Act, then report; stop and ask only for an ambiguous destination or meaning, anything leaving the vault, or changing [[= owner =]]'s own sentences; never rewrite git history. The full tiers and the `.obsidian/` and git safeguards: `Agents/agent-protocol.md` (Permission tiers).
+
+## Common commands
+
+Run from the vault root.
+
+```bash
+python3 .scripts/vault-lint                          # baseline: errors, warnings, info per check
+python3 .scripts/vault-lint --fix Tasks/new-task.md  # format and fix one changed file, then re-lint
+python3 .scripts/vault-lint --review --days 7        # daily review and week ahead
+python3 .scripts/vault-lint --only projects          # active projects with no next action
+python3 .scripts/vault-lint --archive-closed --promote   # archive closed tasks, promote next steps (--dry-run first)
+grep -ril "northwind" Tasks Projects Areas Resources People Archive   # search before creating
+```
+
+Every flag: `python3 .scripts/vault-lint --help`; every check: `--list-checks`. Without Obsidian, Dataview blocks don't render: use `vault-lint --review`, `--only <check>`, and the query table in `Agents/gtd.md`.
+
+Don't add tool-specific copies of this file (`CLAUDE.md`, `.cursor/rules/`, `.github/copilot-instructions.md`); put new rules in `Agents/local/`. If a tool can't read `AGENTS.md`, point it here in that tool's own settings.

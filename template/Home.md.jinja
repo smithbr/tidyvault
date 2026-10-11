@@ -1,0 +1,95 @@
+---
+title: Home
+---
+# Home
+
+## Due today
+
+```dataviewjs
+await dv.view("Agents/views/task-status", {status: "open", due: "today", columns: "due,for"})
+```
+
+## Overdue and due in 7 days
+
+```dataviewjs
+await dv.view("Agents/views/task-status", {status: "open", due: "7d", columns: "due,for"})
+```
+
+## High priority, no due date
+
+```dataviewjs
+await dv.view("Agents/views/task-status", {status: "next-action,waiting-for", priority: "urgent,high", due: "none", sort: "priority", columns: "priority,for"})
+```
+
+## Questions for [[= owner =]]
+
+```dataviewjs
+await dv.view("Agents/views/task-status", {status: "open", question: "true", sort: "created", columns: "question,priority,for,created"})
+```
+
+## Agents' to-dos
+
+Tasks an agent does next ([[gtd#Agent tasks]]). Waiting 2+ days means that role hasn't run: start it by name.
+
+```dataviewjs
+await dv.view("Agents/views/task-status", {status: "open", assignee: "roles", sort: "waiting_since", columns: "assignee,waiting_since,for"})
+```
+
+## Inbox to clarify
+
+```dataviewjs
+await dv.view("Agents/views/task-status", {status: "inbox", columns: "area,project,created"})
+```
+
+## Next actions by project or area
+
+The dropdown on every list sets a task's status. An agent finishes the change: archives a done task and promotes the next step, or asks who a waiting-for task waits on.
+
+```dataviewjs
+await dv.view("Agents/views/task-status", {status: "next-action", group: "project", columns: "contexts,due"})
+```
+
+## Waiting for
+
+```dataviewjs
+await dv.view("Agents/views/task-status", {status: "waiting-for", hide: "roles", columns: "waiting_on,waiting_since,project"})
+```
+
+## Projects with no next action
+
+```dataview
+TABLE WITHOUT ID file.link AS "Project", phase AS "Phase", priority AS "Priority"
+FROM "Projects"
+WHERE (phase = "in-progress" OR phase = "not-started")
+  AND length(filter(file.inlinks, (t) => startswith(meta(t).path, "Tasks/") AND t.status = "next-action" AND t.project = file.link)) = 0
+SORT phase ASC
+```
+
+## Project review
+
+Each project's status sheet is its `## Status` section, rewritten on every sweep.
+
+```dataview
+TABLE WITHOUT ID file.link AS "Project", phase AS "Phase", health AS "Health", last_sweep AS "Last sweep", priority AS "Priority"
+FROM "Projects"
+WHERE phase != "done" AND phase != "cancelled"
+SORT choice(health = "blocked", 0, choice(health = "at-risk", 1, choice(health = "on-track", 2, 3))) ASC, last_sweep ASC
+```
+
+## Agent activity
+
+```dataview
+TABLE WITHOUT ID file.link AS "Log", date AS "Date"
+FROM "Agents/logs"
+WHERE date >= date(today) - dur(7 days)
+SORT date DESC, file.name ASC
+```
+
+## Recently completed
+
+```dataview
+TABLE WITHOUT ID file.link AS "Task", completed AS "Completed", project AS "Project"
+FROM "Archive" OR "Tasks"
+WHERE (status = "done" OR status = "cancelled") AND completed AND completed >= date(today) - dur(7 days)
+SORT completed DESC
+```

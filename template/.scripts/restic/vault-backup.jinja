@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Back up the vault folder, apply retention, and spot-check stored data.
+# Runs nightly from launchd (macOS) or cron (Linux); see install.sh.
+set -euo pipefail
+
+vault_restic="$(dirname -- "${BASH_SOURCE[0]}")/vault-restic"
+cfg="${VAULT_RESTIC_CONFIG:-${HOME}/.config/restic}"
+# shellcheck source=/dev/null
+. "${cfg}/[[= vault =]].env"
+
+vault="${VAULT_BACKUP_PATH:?set VAULT_BACKUP_PATH in ${cfg}/[[= vault =]].env}"
+host="${BACKUP_HOST:-$(hostname -s)}"
+
+if [[ ! -d "${vault}/.obsidian" ]] && [[ ! -f "${vault}/AGENTS.md" ]]; then
+    printf '%s: %s does not look like the vault; not backing it up\n' "${0##*/}" "${vault}" >&2
+    exit 1
+fi
+
+printf '== %s\n' "$(date '+%Y-%m-%d %H:%M:%S')"
+"${vault_restic}" backup "${vault}" --tag vault --host "${host}" --exclude-caches \
+    --exclude "${vault}/_tmp" --exclude "${vault}/.trash" \
+    --exclude "${vault}/.obsidian/workspace*.json"
+"${vault_restic}" forget --tag vault --host "${host}" \
+    --keep-daily "${KEEP_DAILY:-7}" --keep-weekly "${KEEP_WEEKLY:-4}" \
+    --keep-monthly "${KEEP_MONTHLY:-12}" --prune
+# Verify a sample of stored data each run.
+"${vault_restic}" check --read-data-subset="${CHECK_SUBSET:-5%}"

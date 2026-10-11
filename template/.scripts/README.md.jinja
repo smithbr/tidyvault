@@ -1,0 +1,215 @@
+# .scripts
+
+Tooling for the vault. Hidden from Obsidian (dot-folder), not notes.
+
+| Path | What it is |
+| --- | --- |
+| `vault-lint` | Validator for `Agents/` rules, plus the GTD review for agents without Obsidian. Python 3 stdlib only. |
+| `import-files` | Vault intake helper: `inventory` (every file in `_imports/` and `_captures/` with size, type, sha256, duplicate or new, note or foreign, code flags), `file --src --slug --name [--dry-run]` (moves byte for byte into `_files/<slug>/`, or `_attachments/<slug>/` when the store is locked or absent; manifest row; checksum check; prints the embed path; a duplicate gets a row and no move), `done-capture <path>`, `fence-fix <path>`. Never deletes an original. Tests: `tests/test_import_files.py`. |
+| `tidy-check` | Read-only vault docs pre-pass (Tidy mode): orphans, duplicate-looking titles and aliases, today's new Resources and People as a `Tidy <Mon D> imports` list, and their broken links. |
+| `run-log` | `start <agent> "<asked>"` writes the run-log heading; `end <agent> [--summary ...]` appends Summary and `### Checks` with lint before and after counts. |
+| `vault-brief` | Daily review as Markdown from `vault-lint --review --json` (`--snapshot-facts` lists facts the Home snapshot could cite). Read-only. |
+| `sort-inbox` | Read-only inbox pre-pass: answered question tasks, tasks with explicit signals, tasks needing judgment. |
+| `pm-check <project-slug>` | Read-only project check: phase, open tasks, next-action rule, best queued task to promote, stale waiting-for, overdue. |
+| `tests/` | Fixture vaults and the test runner for `vault-lint` (`run.py`); the script tests are `test_*.py` beside it (`python3 -m unittest discover -s .scripts/tests`). |
+[[% if store %]]
+| `store-move` | moves filed attachments into the file store (`_files/`), checking checksums and repointing links. `--dry-run` first. Rules: `Agents/organization.md` (File store). |
+| `store-image` | `status`, `unlock`, `lock` for the file store's encrypted disk image. Agents check `status` before writing to `_files/`. |
+[[% endif %]]
+[[% if pii %]]
+| `pii-register-check` | Needs the 1Password CLI (`op`) signed in: checks the PII register document against `Resources/pii-register.md` (every key both ways), and with a file argument that the file is byte-identical. Prints keys and checksums, never values. |
+| `pii-merge-queue` | Needs the 1Password CLI (`op`) signed in: merges `_files/_private/pii-register-queue.md` into the register document under each person's heading, asks before uploading, skips keys already there, removes exact duplicate rows (lists same-key conflicts), checks every key landed, then offers to empty the queue. `--dry-run` shows the plan. Prints keys and counts, never values. |
+[[% endif %]]
+[[% if backup %]]
+| `restic/` | Nightly restic backups of the vault[[%+ if store +%]] and the file store[[%+ endif +%]]. See `restic/README.md`. |
+[[% endif %]]
+
+## vault-lint
+
+```sh
+python3 .scripts/vault-lint                    # lint the whole vault
+python3 .scripts/vault-lint Tasks/ Home.md     # only report these paths
+python3 .scripts/vault-lint --only links,tasks # only these checks
+python3 .scripts/vault-lint --quiet            # errors only
+python3 .scripts/vault-lint --json             # [{check, severity, path, line, message, fixable}]
+python3 .scripts/vault-lint --fix              # safe frontmatter fixes + Linter body formatting, then re-lint
+python3 .scripts/vault-lint --fix Tasks/x.md   # the same, for one changed file (the usual agent step)
+python3 .scripts/vault-lint --list-checks
+python3 .scripts/vault-lint --today 2026-10-01 # pretend it's another day (date rules)
+python3 .scripts/vault-lint --archive-closed --promote --dry-run   # the plan, nothing written
+python3 .scripts/vault-lint --archive-closed --promote             # do it
+```
+
+Exit `0` = no errors (warnings and info never fail), `1` = errors, `2` = bad usage.
+The whole vault is always indexed, so a path filter only narrows what's reported.
+A whole-vault run takes about 0.2 s.
+
+Checks, in output order: `structure`, `file-format`, `frontmatter-present`,
+`frontmatter-syntax`, `filename`, `unique-names`, `title`, `schema`, `links`,
+`relations`, `waiting-on`, `tasks`, `projects`, `archive`, `attachments`, `manifest`, `anatomy`,
+`dataview`, `dataviewjs`, `dates`, `pii`, `sensitive`, `format`, `orphans`, `facts`, `source-urls`. A check whose module is off in `.tidyvault.yml` is skipped (`--list-checks` says which).
+
+`--fix` only does rewrites that can't change meaning: key order, quoting bare
+wikilinks, inline → block lists, list indent, unquoting ISO dates, deleting
+empty keys and the redundant retired fields (`agent_review`, `edited`, `archive: false`,
+and `lint.retired_fields` from `.tidyvault.yml`), and stripping a UTF-8 byte-order mark.
+Key order is `title` → folder fields → (Archive: `archived`, `archived_from`) →
+`aliases`, `tags`, `sensitive`, `public_places`, `created`.
+
+In the body it applies the `format` check, the same spacing and markup the
+Obsidian Linter writes on save: trailing spaces, `*`/`+`/`•` bullets to `-`,
+one blank line around headings, code fences, tables and blockquotes, no runs of
+blank lines, no blank line between the frontmatter and the H1, one newline at
+end of file.
+
+`--fix` guarantees:
+
+- **Wording never changes.** Body fixes touch only whitespace and markup, never
+  fenced code. CRLF notes and templates get frontmatter fixes only; their
+  bodies are left byte for byte.
+- **Atomic:** each file is written to a temp file in the same folder, fsynced,
+  and renamed over the original with its mode kept. If the file changed on disk
+  since it was read (another agent, Obsidian), it is skipped, not clobbered.
+- **Idempotent:** a second run changes nothing.
+- **Hands off** anything it can't rewrite safely: frontmatter outside the YAML
+  subset, mixed line endings in the frontmatter, non-UTF-8 files, symlinks,
+  files over 2 MB. Fix those by hand.
+
+Odd files never crash a run: non-UTF-8 files are decoded with replacement and
+reported (`file-format` error); BOM and CRLF are reported and handled; symlinks
+are reported and never followed (they still resolve as link targets); notes over
+2 MB are reported and skipped by content checks.
+
+Exempt: `Agents/templates/` note bodies (Templater source) and the root files
+`AGENTS.md` and `llms.txt` (not vault notes; they still count
+for `unique-names`). Project rules follow the state machine in `Agents/gtd.md`.
+
+Never indexed: hidden dot-folders, `_tmp/` (agent scratch space), `_imports/`
+(foreign files awaiting import), and `_captures/` (capture notes awaiting
+filing); rules for all three are in
+`Agents/organization.md`. Nothing inside them is linted, counted for
+`unique-names`, or used to resolve links, so a stray copy there can't break a run.
+
+`schema.md` is the contract. When it changes, update the tables at the top of
+`vault-lint` in the same change. The docstring explains how to add a check.
+
+## Archive and promote (the mechanical GTD steps)
+
+Two flags do what an agent used to do by hand, with no tokens spent. Both print
+one line per change, run `--fix` on the files they wrote, then lint. `--dry-run`
+prints the plan and writes nothing. Paths limit what they touch.
+
+| Flag | Does | Leaves for an agent |
+| --- | --- | --- |
+| `--archive-closed` | Every `done` or `cancelled` task in `Tasks/`: sets `completed` (today, when missing), adds `archived: true` and `archived_from: Tasks`, moves it to `Archive/` under the same filename (`Agents/procedures.md`, Archive a file) | Closed projects (archiving sorts their tasks and Resources); a task whose frontmatter is outside the subset; a filename already taken in `Archive/` |
+| `--promote` | Each `not-started` or `in-progress` project with no next action: sets its best `queued` task with every blocker closed to `next-action`; best = highest `priority`, then earliest `due`, then oldest `created` (`Agents/gtd.md`, Promote on close) | `contexts` (never guessed; the report flags a promoted task without them); a project with no ready queued task (write one, or change its phase) |
+
+Neither overwrites anything: a name taken in `Archive/`, or a file that changed
+while the script ran, is skipped and reported. Together, archive runs first. The
+`--review` "Promote" pointer under "Projects breaking the next-action rule" uses
+the same rule.
+
+## Review mode (GTD review without Obsidian)
+
+Agents that can't run Dataview use this instead of the queries in
+`Agents/gtd.md`:
+
+```sh
+python3 .scripts/vault-lint --review                     # Markdown, today
+python3 .scripts/vault-lint --review --today 2026-10-01  # as of another day
+python3 .scripts/vault-lint --review --days 7            # daily review: due within 2 days, plus the week ahead
+python3 .scripts/vault-lint --review --json              # one object, a key per section
+python3 .scripts/vault-lint --review --no-git            # staleness from file mtimes, not git
+```
+
+Sections, in order (JSON keys in brackets):
+
+| Section | What it lists |
+| --- | --- |
+| Lint summary [`lint`] | Error and warning counts from a full lint |
+| Overdue and due within N days [`due`] | Open tasks and active projects with `due` ≤ today + `--days` (default 7), with days left or overdue |
+| Next actions by project [`next_actions_by_project`] | `next-action` tasks grouped by `project` (`""` = area-only), sorted by due, priority, created |
+| Next actions by context [`next_actions_by_context`] | The same tasks grouped by each `contexts` value (`""` = none set) |
+| Inbox captures [`inbox`, `queued_steps`] | `inbox` tasks, oldest first; count of `queued` project steps |
+| Waiting for [`waiting`] | Every `waiting-for` task with its age in days; 7+ days (or no `waiting_since`) is flagged "chase, wait, or drop?" |
+| Next-action rule breaches [`project_rule`] | Projects outside the state machine's next-action count, with the next action to promote when one is missing |
+| Blocked tasks to promote [`promote`] | `inbox` or `queued` tasks whose every `blocked_by` is done, cancelled, or archived |
+| Stale projects [`stale_projects`] | `in-progress` projects with no change to any of their tasks (in `Tasks/` or `Archive/`) for 14+ days, from `git log`; uncommitted edits count as today. Falls back to file mtimes when the vault isn't a git work-tree root or git is missing (`source` says which) |
+| Closed but not archived [`closed_not_archived`] | `done`/`cancelled` tasks and projects still in `Tasks/` or `Projects/` |
+| Someday/maybe revisits [`revisit`] | Bullets under an Area's `## Someday/maybe` whose `(revisit YYYY-MM-DD)` is on or before today |
+
+Review mode always exits `0` and never writes.
+
+## Rule coverage matrix
+
+Which checks enforce each rule; the rule text lives in `Agents/strict-rules.md`, each check's scope in `--list-checks`. "—" means judgment or process, not checked. A module rule's checks run only where its module is on.
+
+| strict-rules.md | Checks |
+| --- | --- |
+| I1 | `structure` |
+| I2 | `structure` |
+| I3 | `schema`, `relations` |
+| I4 | `unique-names` |
+[[% if store %]]
+| S1 | `structure`, `attachments`, `manifest` |
+[[% endif %]]
+| I5 | `title` |
+| I6 | `filename`, `title` |
+| H1 | `tasks` |
+| H2 | `filename`, `title`, `anatomy` |
+| H3 | — |
+| I7 | `schema`, `frontmatter-syntax` |
+| I8 | `frontmatter-syntax` |
+| H4 | `schema` |
+| I9 | `links` |
+| H5 | — |
+| I10 | `tasks` |
+| I11 | `projects`, `tasks` |
+| H6 | `tasks`, `dates` |
+| I12 | `tasks`, `projects`, `archive` |
+| H7 | `unique-names` |
+[[% if pii %]]
+| P1 | `pii`, `sensitive` |
+[[% endif %]]
+| H8 | — |
+| H9 | — |
+| I13 | all |
+[[% if false_facts %]]
+| F1 | `facts` |
+[[% endif %]]
+| H10 | — |
+| H11 | — |
+| `lint.read_only_url_patterns` (local-rules) | `source-urls` |
+
+| Manual page | Checks |
+| --- | --- |
+| schema.md | `frontmatter-present`, `frontmatter-syntax`, `schema`, `relations`, `links`, `tasks`, `projects`, `dates`[[%+ if pii +%]], `pii`[[%+ endif +%]] |
+| gtd.md | `tasks`, `projects`, `archive`, `structure`, `filename`, `anatomy`, `orphans`; `--review` |
+| organization.md | `attachments`, `manifest` |
+| linking.md | `links`, `unique-names`, `frontmatter-syntax`, `relations`, `facts` |
+| naming-and-style.md | `title`, `filename`, `projects`, `anatomy`, `schema` |
+| procedures.md | `anatomy` |
+[[% if pii %]]
+| sensitive-data.md | `pii`, `sensitive`, `relations`, `waiting-on` |
+[[% endif %]]
+| body-sections.md | `frontmatter-present`, `title`, `format`, `anatomy`, `dataview`, `dataviewjs` |
+| (none: tool hygiene) | `file-format` |
+
+## Tests
+
+```sh
+python3 .scripts/tests/run.py
+python3 -m unittest discover -s .scripts/tests -p 'test_*.py'
+```
+
+| Fixture | Purpose |
+| --- | --- |
+| `tests/fixtures/good` | Must lint completely clean (includes Dataview lambdas/aliases, `~~~` fences, a file with no trailing newline, a Templater template) |
+| `tests/fixtures/bad` | Must trip every check (includes CRLF, BOM and Latin-1 files) |
+| `tests/fixtures/fix` + `fix-expected` | `--fix` output, idempotency, body preservation |
+| `tests/fixtures/review` | `--review` sections, run with `--today 2026-09-26` |
+
+Symlinks, a 2.7 MB note, concurrent-edit protection, git-based staleness and the
+audit regressions (`AuditRegressions`: `_tmp/` skipping, Archive fields, template
+type, and more) are built in temp folders at test time. Pass `--today YYYY-MM-DD` and `--root DIR`
+to reproduce any run.

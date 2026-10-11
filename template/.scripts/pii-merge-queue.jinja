@@ -1,0 +1,197 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.9"
+# dependencies = []
+# ///
+"""Merge the PII queue into the password-manager register (needs the 1Password CLI `op` signed in).
+
+  pii-merge-queue            fetch "[[= vault =]] PII register", merge every row of
+                             _files/_private/pii-register-queue.md under its
+                             person's heading as | Key | Category | Value |
+                             Where used | Notes | (skipping keys already there),
+                             drop rows the register repeats exactly, show keys
+                             and counts, ask,
+                             upload, check every key landed, then empty the queue
+  pii-merge-queue --dry-run  show what would be merged; change nothing
+
+Prints keys, headings and counts, never a value. Temp files live in a private
+temp dir removed on exit. Exit 0 = merged (or nothing to do), 1 = a check
+failed, 2 = bad usage or no access.
+"""
+import os, re, subprocess, sys, tempfile, shutil
+
+ITEM = os.environ.get("PII_REGISTER_ITEM", "[[= vault =]] PII register")
+ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+if not os.path.isfile(os.path.join(ROOT, "Resources", "pii-register.md")):
+    ROOT = os.environ.get("VAULT_ROOT") or sys.exit(f"{os.path.basename(sys.argv[0])}: set VAULT_ROOT to the vault path")
+QUEUE = os.environ.get("PII_QUEUE", os.path.join(ROOT, "_files", "_private", "pii-register-queue.md"))
+HEADER = "| Key | Category | Value | Where used | Notes |\n|---|---|---|---|---|\n"
+KEY_RE = re.compile(r"`([a-z0-9-]+\.[a-z]+\.[a-z0-9-]+)`")
+NAME = os.path.basename(sys.argv[0])
+
+
+def die(msg, code=2):
+    print(f"{NAME}: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def slug(s):
+    return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")
+
+
+def cells(line):
+    return [c.strip() for c in line.strip().strip("|").split("|")]
+
+
+def parse_queue(text):
+    """Return [(key, person_name_or_None, [5 cells])] from bullet or table rows."""
+    rows = []
+    for line in text.splitlines():
+        s = line.strip()
+        m = KEY_RE.search(s)
+        if not m or s.startswith("|---"):
+            continue
+        name = None
+        if s.startswith("- "):
+            parts = cells(s[2:])
+            if parts and not KEY_RE.search(parts[0]):
+                name, parts = parts[0], parts[1:]
+        else:
+            parts = cells(s)
+        # parts[0] is the key cell; normalize to exactly 5 cells
+        if len(parts) > 5:
+            parts = parts[:4] + ["; ".join(p for p in parts[4:] if p)]
+        parts += [""] * (5 - len(parts))
+        rows.append((m.group(1), name, parts))
+    return rows
+
+
+def merge(register, rows):
+    lines = register.splitlines(keepends=True)
+    if lines and not lines[-1].endswith("\n"):
+        lines[-1] += "\n"
+    present = set(KEY_RE.findall(register))
+    heads = {slug(l[3:]): i for i, l in enumerate(lines) if l.startswith("## ")}
+    added, skipped, new_heads = {}, [], []
+    for key, name, parts in rows:
+        if key in present:
+            skipped.append(key)
+            continue
+        person = key.split(".")[0]
+        row = "| " + " | ".join(parts) + " |\n"
+        if person in heads:
+            i = heads[person]
+            end = next((j for j in range(i + 1, len(lines)) if lines[j].startswith("## ")), len(lines))
+            last = max((j for j in range(i + 1, end) if lines[j].lstrip().startswith("|")), default=None)
+            if last is None:
+                lines[i + 1:i + 1] = ["\n", HEADER, row]
+            else:
+                lines.insert(last + 1, row)
+            heading = lines[i][3:].strip()
+        else:
+            heading = name if name and not re.match(r"(?i)un(identified|named)", name) else person.replace("-", " ").title()
+            if lines and lines[-1].strip():
+                lines.append("\n")
+            lines += [f"## {heading}\n", "\n", HEADER, row]
+            heads[person] = len(lines) - 4
+            new_heads.append(heading)
+        heads = {slug(l[3:]): i for i, l in enumerate(lines) if l.startswith("## ")}
+        present.add(key)
+        added.setdefault(heading, []).append(key)
+    return "".join(lines), added, skipped, new_heads
+
+
+def dedupe(text):
+    """Drop repeated rows with the same key and the same cells; report keys that
+    repeat with different cells (kept, for [[= owner =]] to check)."""
+    seen, out, removed, conflicts = {}, [], [], []
+    for line in text.splitlines(keepends=True):
+        s = line.strip()
+        m = KEY_RE.match(s.lstrip("| ").strip()) if s.startswith("|") else None
+        if m:
+            norm = [c for c in cells(s)]
+            while norm and not norm[-1]:
+                norm.pop()
+            key = m.group(1)
+            if key in seen:
+                if seen[key] == norm:
+                    removed.append(key)
+                    continue
+                if key not in conflicts:
+                    conflicts.append(key)
+            else:
+                seen[key] = norm
+        out.append(line)
+    return "".join(out), removed, conflicts
+
+
+def main():
+    args = sys.argv[1:]
+    if args and args[0] in ("-h", "--help"):
+        print(__doc__.strip()); return 0
+    dry = args == ["--dry-run"]
+    if args and not dry:
+        die(f"usage: {NAME} [--dry-run]")
+    if not shutil.which("op"):
+        die("1Password CLI (op) not found")
+    if not os.path.isfile(QUEUE):
+        die(f"no queue at {QUEUE}")
+    rows = parse_queue(open(QUEUE).read())
+    if not rows:
+        print("Queue is empty; nothing to merge."); return 0
+    old = os.umask(0o077)
+    tmp = tempfile.mkdtemp()
+    os.umask(old)
+    try:
+        reg = os.path.join(tmp, "pii-register.md")
+        if subprocess.run(["op", "document", "get", ITEM, "--out-file", reg], capture_output=True).returncode:
+            die(f'couldn\'t fetch "{ITEM}" from 1Password (signed in?)')
+        merged, added, skipped, new_heads = merge(open(reg).read(), rows)
+        merged, removed, conflicts = dedupe(merged)
+        n = sum(len(v) for v in added.values())
+        print(f"Queue rows: {len(rows)}. To add: {n}. Already in the register (skipped): {len(skipped)}.")
+        print(f"Register rows repeated exactly (to remove): {len(removed)}.")
+        for k in removed:
+            print(f"  duplicate removed: {k}")
+        for k in conflicts:
+            print(f"  same key, different values (kept both; check by hand): {k}")
+        for h, keys in added.items():
+            print(f"  ## {h}{' (new heading)' if h in new_heads else ''}: {len(keys)}")
+            for k in keys:
+                print(f"     {k}")
+        for k in skipped:
+            print(f"  skipped (already there): {k}")
+        if dry:
+            return 0
+        if n == 0 and not removed:
+            print("Everything in the queue is already in the register.")
+            if input("Empty the local queue file now? [y/N] ").strip().lower() == "y":
+                open(QUEUE, "w").close()
+                print("Queue emptied.")
+            return 0
+        if input(f'Upload the merged register to "{ITEM}"? [y/N] ').strip().lower() != "y":
+            print("Nothing uploaded."); return 0
+        open(reg, "w").write(merged)
+        if subprocess.run(["op", "document", "edit", ITEM, reg], capture_output=True).returncode:
+            die("upload failed; nothing changed in 1Password or the queue", 1)
+        check = os.path.join(tmp, "check.md")
+        subprocess.run(["op", "document", "get", ITEM, "--out-file", check, "--force"], capture_output=True)
+        have = set(KEY_RE.findall(open(check).read())) if os.path.exists(check) else set()
+        missing = [k for keys in added.values() for k in keys if k not in have]
+        if missing:
+            print("Check FAILED, these keys aren't in 1Password; the queue was left as is:")
+            for k in missing:
+                print(f"  {k}")
+            return 1
+        print(f"Uploaded and checked: all {n} new keys are in 1Password; {len(removed)} duplicate rows removed.")
+        if input("Empty the local queue file now? [y/N] ").strip().lower() == "y":
+            open(QUEUE, "w").close()
+            print("Queue emptied.")
+        print('Last step, in 1Password: remove the extra "pii-register-queue.md" attachment from the item.')
+        return 0
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

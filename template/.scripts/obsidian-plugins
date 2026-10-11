@@ -1,0 +1,78 @@
+#!/usr/bin/env python3
+"""Install the community plugins listed in .obsidian/community-plugins.json.
+
+  .scripts/obsidian-plugins             install plugins that have no main.js yet
+  .scripts/obsidian-plugins --update    also replace installed ones with the latest release
+  .scripts/obsidian-plugins --dry-run   print what would be downloaded
+
+Run it from the vault root with Obsidian closed (or reload Obsidian after).
+Each plugin's GitHub repository comes from Obsidian's community plugin list;
+main.js, manifest.json and styles.css (when the release has one) come from its
+latest release. Settings (data.json) are never touched. Obsidian's own
+Settings -> Community plugins -> Browse does the same by hand.
+"""
+import argparse
+import json
+import sys
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+LIST_URL = "https://raw.githubusercontent.com/obsidianmd/obsidian-releases/master/community-plugins.json"
+RELEASE_URL = "https://github.com/{repo}/releases/latest/download/{name}"
+FILES = ("main.js", "manifest.json", "styles.css")
+OPTIONAL = {"styles.css"}
+
+
+def fetch(url):
+    with urllib.request.urlopen(url, timeout=60) as resp:
+        return resp.read()
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--update", action="store_true", help="replace plugins already installed")
+    parser.add_argument("--dry-run", action="store_true", help="download nothing")
+    parser.add_argument("--root", default=".", help="vault root (default: current folder)")
+    args = parser.parse_args()
+
+    obsidian = Path(args.root) / ".obsidian"
+    wanted = json.loads((obsidian / "community-plugins.json").read_text())
+    repos = {p["id"]: p["repo"] for p in json.loads(fetch(LIST_URL))}
+
+    status = 0
+    for plugin in wanted:
+        folder = obsidian / "plugins" / plugin
+        if (folder / "main.js").exists() and not args.update:
+            print(f"installed  {plugin}")
+            continue
+        repo = repos.get(plugin)
+        if repo is None:
+            print(f"UNKNOWN    {plugin} (not in Obsidian's community plugin list)", file=sys.stderr)
+            status = 1
+            continue
+        if args.dry_run:
+            print(f"would get  {plugin} from {repo}")
+            continue
+        try:
+            files = {}
+            for name in FILES:
+                try:
+                    files[name] = fetch(RELEASE_URL.format(repo=repo, name=name))
+                except urllib.error.HTTPError as err:
+                    if err.code != 404 or name not in OPTIONAL:
+                        raise
+        except (urllib.error.URLError, TimeoutError) as err:
+            print(f"FAILED     {plugin} from {repo}: {err}", file=sys.stderr)
+            status = 1
+            continue
+        folder.mkdir(parents=True, exist_ok=True)
+        for name, body in files.items():
+            (folder / name).write_bytes(body)
+        version = json.loads(files["manifest.json"]).get("version", "?")
+        print(f"got        {plugin} {version}")
+    return status
+
+
+if __name__ == "__main__":
+    sys.exit(main())

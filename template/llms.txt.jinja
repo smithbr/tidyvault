@@ -1,0 +1,71 @@
+# [[= vault =]]
+
+> [[= owner =]]'s knowledge base: plain Markdown files in an Obsidian vault, sorted into PARA folders (Projects, Areas, Resources, Archive) plus Tasks and People, and run with GTD. Rules live in Agents/; `python3 .scripts/vault-lint` validates every change. Paths below are relative to the vault root.
+
+Key points:
+- Start at AGENTS.md. Where AGENTS.md and Agents/ disagree, the manual wins; [[= owner =]]'s direct instruction beats both.
+- One file per item (Task, Project, Area, Resource, or Person), filename = kebab-case slug of the title, frontmatter per Agents/schema.md.
+- Act, then report; stop and ask before anything that leaves the vault. Full permission tiers in Agents/agent-protocol.md.
+- Kit-managed pages are updated by `copier update`; this vault's own rules live in Agents/local/.
+
+## Start here
+
+- [AGENTS.md](AGENTS.md): Entrypoint. Folder map, the short loop, permissions, common commands
+- [Agents index](Agents/README.md): Reading order, roles, common requests mapped to recipes, precedence, kit-managed pages
+- [Strict rules](Agents/strict-rules.md): The non-negotiables with stable IDs, most checked by vault-lint
+- [Local rules](Agents/local/local-rules.md): This vault's own rules (L1, L2, …), never touched by the kit
+- [Agent protocol](Agents/agent-protocol.md): Operating loop, permission tiers, report template, run logs, running alongside other agents, safe editing alongside Obsidian Sync and git
+
+## Roles
+
+Who owns what and the phrases that start each: [Agents index](Agents/README.md) (Roles).
+
+- [Vault intake](Agents/roles/role-vault-intake.md): File the drop folders: imported files become Resources with their attachments, capture notes become tasks, facts, and people
+- [Vault pm](Agents/roles/role-vault-pm.md): Sort the inbox, run one named project, daily and weekly review
+- [Vault docs](Agents/roles/role-vault-docs.md): Merge, rename, archive Resources and People; Check mode lists contradictions and stale claims by severity; Erase mode erases an item [[= owner =]] names, everywhere
+- [Vault ask](Agents/roles/role-vault-ask.md): Answer from the vault, research a decision, grill a plan
+- [Vault ops](Agents/roles/role-vault-ops.md): Keep the machinery running: archive and promote sweeps, store and manifest checks, plugin updates, backup and git health
+- [Vault admin](Agents/roles/role-vault-admin.md): The manual, vault-lint, settings, and kit updates
+
+## Rules and contracts
+
+- [Schema](Agents/schema.md): Every frontmatter field, allowed value, and key order per folder
+- [Organization](Agents/organization.md): Where each kind of thing goes, standing edge cases, attachments and imports
+- [GTD](Agents/gtd.md): Clarify decision tree, task and project state machines, daily and weekly review, shell queries
+- [Naming and style](Agents/naming-and-style.md): Titles, the slug algorithm, voice, dates
+- [Linking](Agents/linking.md): Link direction, the task-resource loop, frontmatter link format
+- [Body sections](Agents/body-sections.md): Body sections and Dataview blocks per type
+[[% if pii %]]
+- [Sensitive data](Agents/sensitive-data.md): PII stays out of the notes; keys link to the value-free stub, values live in the password manager
+- [PII allowlist](Agents/pii-allowlist.md): business email domains and addresses the pii check skips
+[[% endif %]]
+- [Outside agent prompt](Agents/outside-agent-prompt.md): The prompt to paste into any outside agent that adds to the vault; the only copy of the capture-note format
+
+## Recipes and templates
+
+- [Procedures](Agents/procedures.md): Create, rename, move, archive, merge, delete, split, and recover files; add a local rule; update from the kit
+- [Task template](Agents/templates/template-task.md): Skeleton for a new Task
+- [Project template](Agents/templates/template-project.md): Skeleton for a new Project
+- [Area template](Agents/templates/template-area.md): Skeleton for a new Area
+- [Resource template](Agents/templates/template-resource.md): Skeleton for a new Resource
+- [Person template](Agents/templates/template-person.md): Skeleton for a new Person
+- [Log template](Agents/templates/template-log.md): Skeleton for an agent's daily run log
+- [Capture template](Agents/templates/template-capture.md): Blank scratch note for [[= owner =]]'s QuickAdd capture
+
+## Tooling
+
+- [Scripts README](.scripts/README.md): vault-lint flags, --fix guarantees, --review mode, the role scripts, rule coverage matrix, tests
+[[% if backup %]]
+- [Backup scripts](.scripts/restic/README.md): Nightly restic backup of the vault[[%+ if store +%]] and the file store[[%+ endif +%]]
+[[% endif %]]
+
+## Optional
+
+- [External systems](Agents/external-systems.md): Which system owns which truth (the vault, the password manager, git, sync, backups, and this vault's own additions)
+- [Troubleshooting](Agents/troubleshooting.md): Symptoms and fixes, FAQ
+[[% if obsidian %]]
+- [Obsidian settings](Agents/obsidian-settings.md): Every core and community plugin, the settings that matter, and why; recommended values
+[[% endif %]]
+- [Glossary](Agents/glossary.md): Definitions of vault and GTD terms
+- [Changelog](Agents/changelog.md): Dated rule changes, newest first
+- [Home](Home.md): [[= owner =]]'s dashboard of Dataview views

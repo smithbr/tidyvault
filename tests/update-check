@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# The two ways a vault takes the kit later, run end to end on a throwaway clone of this repo:
+#   1. copier update: a vault rendered from version A takes version B. Local edits to a kit page
+#      survive, the kit's change arrives, seeds and the vault's own content are untouched, no .rej.
+#   2. copier copy -w into an existing vault (how a vault that never came from the kit adopts it):
+#      its notes, People, Resources, and Agents/local/ survive; the kit's pages appear.
+# Usage: tests/update-check. Needs git, copier, python3. Exit 0 only when every assertion holds.
+set -euo pipefail
+
+kit="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+work="$(mktemp -d "${TMPDIR:-/tmp}/update-check.XXXXXX")"
+trap 'rm -rf "${work}"' EXIT
+fail=0
+ok()   { printf 'ok    %s\n' "$1"; }
+bad()  { printf 'FAIL  %s\n' "$1"; fail=1; }
+check() { if eval "$2"; then ok "$1"; else bad "$1"; fi; }
+lint_ok() { local out; if out="$(cd "$1" && python3 .scripts/vault-lint 2>&1)"; then return 0; else printf '%s\n' "${out}" | grep -E ": (error|warning): |total" | head -20; return 1; fi; }
+git_() { git -C "$1" -c user.name=t -c user.email=t@t "${@:2}"; }
+
+# A clone with its own throwaway tags: the real repo's tags and history are never touched.
+git clone -q "${kit}" "${work}/kit"
+git_ "${work}/kit" tag v9.0.0 >/dev/null
+answers=(-d owner=Robin -d "owner_full=Robin Vale" -d vault=uc -d backup=true)
+
+# ---- 1. copier update ----------------------------------------------------------------
+v="${work}/v"
+copier copy --defaults --quiet "${answers[@]}" "${work}/kit" "${v}" 2>/dev/null
+git_ "${v}" init -q && git_ "${v}" add -A && git_ "${v}" commit -qm base
+# the vault's own content, a seed edit, a local rule, and a local edit to a kit page
+cat > "${v}/Tasks/water-the-plants.md" <<'EOF'
+---
+title: Water the plants
+status: next-action
+area:
+  - "[[general]]"
+created: 2026-10-01
+---
+# Water the plants
+EOF
+printf '\n## Notes\n\n- A note Robin wrote.\n' >> "${v}/Areas/general.md"
+printf '\n- **L1. Plants are watered on Sundays.**\n' >> "${v}/Agents/local/local-rules.md"
+printf '\n- A local edit at the end of gtd.\n' >> "${v}/Agents/gtd.md"
+git_ "${v}" add -A && git_ "${v}" commit -qm "vault content"
+# the kit moves on: a new line in one page, a new rule in strict-rules
+printf '\n- **Kit line added for update-check.**\n' >> "${work}/kit/template/Agents/naming-and-style.md.jinja"
+git_ "${work}/kit" add -A && git_ "${work}/kit" commit -qm "kit change" && git_ "${work}/kit" tag v9.0.1 >/dev/null
+( cd "${v}" && copier update --defaults --quiet 2>/dev/null )
+check "update: kit change arrived"            "grep -q 'Kit line added for update-check' '${v}/Agents/naming-and-style.md'"
+check "update: local edit to a kit page kept"  "grep -q 'A local edit at the end of gtd' '${v}/Agents/gtd.md'"
+check "update: vault content untouched"        "grep -q 'Water the plants' '${v}/Tasks/water-the-plants.md'"
+check "update: seed edit untouched"            "grep -q 'A note Robin wrote' '${v}/Areas/general.md'"
+check "update: local rule untouched"           "grep -q 'L1. Plants are watered' '${v}/Agents/local/local-rules.md'"
+check "update: no conflict markers"            "! grep -rl '^<<<<<<< ' '${v}' --exclude-dir=.git | grep -q ."
+check "update: no .rej files"                  "! find '${v}' -name '*.rej' | grep -q ."
+check "update: answers record v9.0.1"          "grep -q '_commit: v9.0.1' '${v}/.copier-answers.yml'"
+check "update: vault still lints clean"        "lint_ok '${v}'"
+
+# ---- 2. copier copy -w into an existing vault -----------------------------------------
+e="${work}/existing"
+mkdir -p "${e}/Tasks" "${e}/People" "${e}/Resources" "${e}/Agents/local/roles" "${e}/Areas"
+cp "${v}/Tasks/water-the-plants.md" "${e}/Tasks/"
+printf -- '---\ntitle: Priya Nair\nrelationship: friend\n---\n# Priya Nair\n\n## Key facts\n\n- Lives in Lisbon.\n' > "${e}/People/priya-nair.md"
+printf -- '---\ntitle: Kitchen quote\ntype: document\ndate: 2026-09-01\n---\n# Kitchen quote\n\nThe quote.\n' > "${e}/Resources/kitchen-quote.md"
+printf -- '---\ntitle: "Role: vault ops (local)"\ntype: manual\n---\n# Role: vault ops (local)\n\nPart of the [[README]]. Modes this vault adds to [[role-vault-ops]].\n' > "${e}/Agents/local/roles/role-vault-ops-local.md"
+printf 'custom-ignore/\n' > "${e}/.gitignore"
+git_ "${e}" init -q && git_ "${e}" add -A && git_ "${e}" commit -qm "existing vault"
+( cd "${e}" && copier copy --defaults --quiet -w --vcs-ref v9.0.1 "${answers[@]}" "${work}/kit" . 2>/dev/null )
+check "adopt: existing task kept"              "grep -q 'Water the plants' '${e}/Tasks/water-the-plants.md'"
+check "adopt: existing Person kept (seed)"     "grep -q 'Lives in Lisbon' '${e}/People/priya-nair.md'"
+check "adopt: existing Resource kept (seed)"   "grep -q 'The quote' '${e}/Resources/kitchen-quote.md'"
+check "adopt: local role page kept"            "grep -q 'Modes this vault adds' '${e}/Agents/local/roles/role-vault-ops-local.md'"
+check "adopt: kit pages present"               "test -f '${e}/AGENTS.md' && test -f '${e}/Agents/strict-rules.md' && test -x '${e}/.scripts/vault-lint'"
+check "adopt: answers written"                 "grep -q '_commit: v9.0.1' '${e}/.copier-answers.yml'"
+check "adopt: .gitignore is kit-managed (overwritten; re-add local lines after adopting)" "! grep -q 'custom-ignore' '${e}/.gitignore'"
+check "adopt: lints clean"                     "lint_ok '${e}'"
+
+exit "${fail}"

@@ -1,0 +1,54 @@
+---
+title: Troubleshooting
+type: manual
+---
+# Troubleshooting
+
+Part of the [[README]]. Symptom, cause, fix. The manual page each fix points to wins over this page; report any conflict.[[%+ if obsidian +%]] Every setting and its recommended value: [[obsidian-settings]].[[%+ endif +%]]
+
+## Common problems
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| A file shows no properties in Obsidian, or Dataview skips it | Invalid YAML: usually an unquoted `[[link]]`, a stray `:` in a value, or frontmatter not on line 1 | Quote links, quote values containing `: `, move `---` to line 1. Run `python3 .scripts/vault-lint`. |
+| `[[link]]` opens the wrong file | Two files share the slug | Rename one so every filename is unique ([[procedures]]); relink. |
+| A link shows as unresolved | Target renamed, deleted, or never created | Repoint it, create the target, or remove the link. |
+| A project's Tasks section is empty but tasks exist | Tasks use a different `project` link (typo, old slug, unquoted) | Fix the tasks' `project` field. |
+| A Dataview block shows an error | A field is text where a link or date is expected, or the query was edited | Check the field in [[schema]]; compare the block with [[body-sections]]. |
+| Dataview shows `dataviewjs` as a code block | Dataview's JavaScript queries are off on this device; they're on in the vault's settings | Check Dataview → Enable JavaScript queries[[%+ if obsidian +%]] ([[obsidian-settings]])[[%+ endif +%]]. |
+| "Dataview: custom view not found for 'Agents/views/task-status.js'" | `Agents/views/task-status/` hasn't reached this device, or was moved | Wait for Sync, or restore the folder from git ([[body-sections]], Task status view). |
+| A closed task still shows on Home | It's `done` but still in `Tasks/` | Archive it ([[procedures]]). |
+| Archived files don't appear in search or the graph | `Archive/` is in Obsidian's excluded files, on purpose | Search the folder directly, or `grep -rl … Archive`. Links into it still work. |
+| New file appeared at the vault root | Obsidian's "Default location for new notes" isn't `Tasks` | Move it to its folder with a slug filename; settings fix in[[%+ if obsidian +%]] [[obsidian-settings]][[%+ else +%]] Obsidian's settings[[%+ endif +%]]. |
+| *Templater: Insert template* lists nothing, or a new file shows raw Templater tags | Templater's template folder isn't `Agents/templates`, or the core Templates plugin was used | Settings fix in[[%+ if obsidian +%]] [[obsidian-settings]][[%+ else +%]] Obsidian's settings[[%+ endif +%]]. Agents copy templates by hand ([[template-task]]). |
+| A file you just edited changed again | [[= owner =]] edited on the phone, another agent edited it, or the Git plugin pulled | Re-read and redo your edit ([[agent-protocol#Running alongside other agents]]). |
+| `git status` shows many changes you didn't make | Uncommitted edits from [[= owner =]], Sync, or another agent; the plugin commits every 15 minutes | Leave them ([[agent-protocol#Editing .obsidian and .git]]). |
+| `vault-lint` reports errors you didn't cause | Pre-existing problems | Fix them if in scope and quick; otherwise list them in the report's Checks section. |
+| `vault-lint` not found or crashes | Script missing or broken | Check by hand ([[agent-protocol]]) and report it. |
+| Lint `pii` error | A note or log holds a PII value (ID, account number, credential, private phone or email, street address, date of birth) | Replace it with its key ([[procedures]], Redact PII). A business's phone or address stays: name the business on the same line. |
+[[% if pii %]]
+| Lint `sensitive` warning | A file has PII keys but no flag | Add `sensitive: true` ([[sensitive-data]]). |
+[[% endif %]]
+| A tab says "Plugin no longer active", or a plugin's commands vanished | The plugin was switched off on this device (for example by Sync's "Active community plugin list", if it was turned back on) | Compare `.obsidian/community-plugins.json` with `git log -p -- .obsidian/community-plugins.json`. [[= owner =]] re-enables it in Settings → Community plugins (a file edit is overwritten while Obsidian runs). Keep "Active community plugin list" off[[%+ if obsidian +%]] ([[obsidian-settings]])[[%+ endif +%]]. |
+| No new "vault backup" commit for over 20 minutes | Obsidian Git is off or erroring, Obsidian is closed, or the git remote is unreachable | Check it's in `community-plugins.json`; `git ls-remote origin HEAD` tests the remote; ask [[= owner =]] for the status-bar error. |
+| Backup commits are huge, or `.git` grows fast | A plugin's cache or index is tracked | Add it to `.gitignore` and `git rm -r --cached` it ([[agent-protocol]]). Old copies stay in history; purging them is a history rewrite, [[= owner =]]'s call. |
+| An attachment opens on one device but is missing on another | The file is over Sync's per-file size limit, or its type is off in that device's Selective sync[[%+ if obsidian +%]] ([[obsidian-settings]])[[%+ endif +%]] | Nothing to fix in the vault: the file is safe in git[[%+ if backup +%]] and the backups[[%+ endif +%]]. [[= owner =]] decides on Sync settings. |
+| A file was deleted by mistake | Anyone | `git log --diff-filter=D --oneline -- '<folder>/*.md'`, then `git show <sha>^:<path> > <path>` ([[procedures]]). |
+
+## FAQ
+
+**Can I delete or archive without asking?** Yes, when the manual says so; list every one in the report ([[agent-protocol]]).
+
+**Task or project?** Follow the clarify tree in [[gtd]]. When truly unclear, file it as an `inbox` task with a best-guess `area` and ask.
+
+**Two plausible projects?** Pick the one whose outcome it moves most directly. If both fit equally, stop and ask.
+
+**[[= owner =]] told me a new rule.** For this request only: follow it. "From now on": change the rule as in [[role-vault-admin]] (Steps: a rule change).
+
+**A Task, Project, Area, Resource, or Person contradicts the manual.** The manual wins; fix it. If it looks deliberate ([[= owner =]]'s own recent edit), report instead of changing it.
+
+**Can I add a field?** Only by changing [[schema]] and `.scripts/vault-lint` in the same change, reported prominently.
+
+**Can I use a different template or section layout?** Not for Tasks, Projects, Areas, or People. Resources use whatever sections their material needs.
+
+**Where do daily notes go?** There are none. Dated events go into a `log` Resource or the relevant Task's, Project's, or Person's Log or Timeline section.

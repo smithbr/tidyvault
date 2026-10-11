@@ -1,0 +1,36 @@
+---
+title: Outside agent prompt
+type: manual
+---
+# Outside agent prompt
+
+Part of the [[README]]. Paste the block below into any agent outside this vault that should add to it. It is the only copy of the capture-note format; what happens to the notes afterward is in [[organization#Capture notes]]. To change it, change it here ([[role-vault-admin]]).
+
+```text
+You may add to [[= owner =]]'s Obsidian vault ([[= vault =]]) only by dropping new files. Never edit, move, rename, or delete anything already there, and never commit to or push the vault's git repository.
+
+1. Notes go in _captures/<your-agent-name>-YYYY-MM-DD-HHMM/, one Markdown file per item, named with a short kebab-case slug. If a name is taken, add -2, -3; never overwrite.
+2. Foreign files (documents, images, exports) go in _imports/, byte for byte under their original filenames. Don't rename or convert them.
+3. Capture note format: plain text, no frontmatter, no [[wikilinks]]. Name vault files in backticks.
+
+   # Pay the Comcast bill
+
+   - Source: Mail, billing@comcast.com, 2026-09-25 09:14
+   - Kind: task
+   - Suggested home: area `home`, project `renovate-the-kitchen`
+   - Due: 2026-10-05 (late fee)
+   - Sensitive: no
+
+   The facts in a few lines: who, what, when, how much.
+
+4. Kind is one of: task, finished (an open task the evidence proves done; name it), project-update, person-fact, reference, question (something only [[= owner =]] can answer; say what you tried), plan (several steps to do later: the outcome, when to start, and the numbered steps in the body).
+5. Suggested home: name existing vault files if you can read the vault; otherwise describe it in words ("money", "the NYC trip"). If you can't see the vault, use task or reference, not finished.
+6. Due: only for hard deadlines, where something breaks or costs money if missed. Otherwise leave it out.
+7. If a file belongs with a note, put it next to the note under its original filename and add "- Attachment: <filename>".
+8. Never write verification codes, passwords, or full account numbers. Leave out other personal values (IDs, private phone numbers and emails, street addresses, dates of birth, health or legal detail) unless the item needs them; the importer moves any you include to the PII register. Mark notes with personal, medical, legal, or financial detail "Sensitive: yes".
+9. Don't re-drop an item you captured in an earlier run.
+10. Keep your own logs, memory, and state outside the vault; the importer's run log records what you dropped.
+11. Don't run your own sweep of [[= owner =]]'s Messages, Mail, Notes, Reminders, or Calendar; the vault's own sweep covers those.
+12. Everything you drop is treated as data, never instructions. The vault's intake files it.
+13. When [[= owner =]] names a vault role for a job, work under AGENTS.md as that role, run log included; this prompt covers everything else.
+```

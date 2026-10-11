@@ -1,0 +1,82 @@
+---
+title: Linking
+type: manual
+---
+# Linking
+
+Part of the [[README]]. How Tasks, Projects, Areas, Resources, and People connect. Links resolve by filename (the slug), which is why filenames are unique across the vault.
+
+## Direction
+
+Each one links what it **needs**. The reverse view comes free from backlinks and Dataview, so nobody maintains reverse lists by hand.
+
+| From | Links to | Field |
+|---|---|---|
+| Task | Its project | `project` (one) |
+| Task | Its area, when there's no project | `area` |
+| Task | Resources needed to do it | `resources` |
+| Task | People involved, who owns it, who it waits on | `people`, `assignee`, `waiting_on` |
+| Task | Tasks that must finish first; its parent task | `blocked_by`, `parent` |
+| Project | Its area(s) | `area` (required) |
+| Project | Its key references and people | `resources`, `people` |
+| Resource | The area, projects, and people it serves | `area`, `projects`, `people` |
+| Person | Areas, projects, resources about them | `area`, `projects`, `resources` |
+| Area | A curated few key people and resources | `people`, `resources` |
+
+Never add: `tasks:` on a project, `projects:` on an area, `blocking:` on a task. Dataview lists those ([[body-sections]]).
+
+## The task-resource loop
+
+Close it in the same change that opens it:
+
+- New Resource that serves a task → add it to that task's `resources`.
+- New task with an existing how-to or analysis → set `resources` when creating the task.
+- Link the Resource [[= owner =]] would actually open to do the task, not every Resource in the project. `Answer Ortiz on expenses` links the estate administration record because that's where the numbers are.
+
+## Frontmatter links
+
+- Double-quoted, lists in block style ([[schema]], YAML format):
+
+  ```yaml
+  resources:
+    - "[[estate-of-theo-vale-administration-record]]"
+    - "[[unclaimed-property-search-results]]"
+  ```
+
+- Link by bare slug, no folder, no `.md`, no display text: `"[[theo-vale]]"`, never `"[[People/theo-vale.md|Theo]]"`.
+- Editing a list **replaces** it. Read the current list first and keep every existing entry you aren't deliberately removing.
+
+## Body links
+
+- `[[slug]]` for a plain link, `[[slug|display text]]` when the sentence needs different words: `[[settle-the-estate|the estate]]`.
+- `[[slug#Heading]]` to point at a section. If you rename that heading, update the links.
+- `![[_files/<note-slug>/file.pdf]]` embeds an attachment, by its full path ([[organization]], Attachments). Use embeds only for attachments, not to transclude other Markdown files.
+- External links use Markdown: `[text](https://…)`.
+- A link to a file you don't want to create yet is not allowed. Write the name in plain text, or in backticks when showing an example: `[[some-note]]`.
+
+## Aliases
+
+Anything known by another name gets it in `aliases` ([[schema]]); in prose use `[[slug|other name]]`.
+
+## Citations
+
+A fact an agent writes from a source ends with one short citation in parentheses, so anyone can trace it. Forward-only: older uncited lines stay as they are; never backfill.
+
+| Source | Citation |
+|---|---|
+| A filed file | `([[<document-slug>]])`: its `type: document` Resource, the file's source page ([[organization]], Where does it go?) |
+| A capture note | `(<app>, <YYYY-MM-DD>, [[log-<role>-<YYYY-MM-DD>]])`: the app and date from its `Source` line, and the run log that filed it |
+| [[= owner =]], in a session | `([[= owner =]], <YYYY-MM-DD>)` |
+| Another vault page | `([[<slug>]])` |
+| A web page | `(<site>, <YYYY-MM-DD>)`, the full link in the Resource's sources |
+
+- Where: the end of each Key facts bullet, dated line, or "Decision on record" line. A merged section, or a new Resource, Person, or Task from one source, cites once, at the end of its first paragraph. A `document` Resource needs none: it is the source.
+- Several sources: one parenthesis, `;` between them. No parentheses inside it.
+- An agent with a newer value adds a new cited line and leaves the older one; [[role-vault-docs]] (Check) resolves the pair.
+- `vault-lint --only facts` lists, as info, Key facts lines added since 2026-10-11 with no citation.
+
+## Integrity
+
+- Every `[[link]]`, in frontmatter and body, resolves to exactly one file. `vault-lint` checks this.
+- Links into `Archive/` are fine; archived files keep their filenames so links survive.
+- When a file is renamed, merged, or deleted, every link to it is rewritten or removed in the same change ([[procedures]]).

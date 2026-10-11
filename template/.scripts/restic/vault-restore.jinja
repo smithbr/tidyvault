@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Restore a snapshot into a new folder and check every git repository in it.
+# Never writes over the live vault[[%+ if store +%]] or store[[%+ endif +%]].
+#   vault-restore                          latest vault snapshot -> ~/restore-<timestamp>
+#   vault-restore 64f0a536                 that snapshot         -> ~/restore-<timestamp>
+#   vault-restore latest /tmp/r            latest snapshot       -> /tmp/r (must not exist)
+[[% if store %]]
+#   vault-restore --store [snapshot] [dir] the same, from the file store repository
+[[% endif %]]
+set -euo pipefail
+
+vault_restic="$(dirname -- "${BASH_SOURCE[0]}")/vault-restic"
+
+repo=()
+tag=vault
+[[% if store %]]
+if [[ "${1:-}" == "--store" ]]; then
+    repo=(--store)
+    tag=store
+    shift
+fi
+[[% endif %]]
+snapshot="${1:-latest}"
+target="${2:-${HOME}/restore-$(date +%Y%m%d-%H%M%S)}"
+
+if [[ -e "${target}" ]]; then
+    printf 'Target already exists: %s\n' "${target}" >&2
+    exit 1
+fi
+
+"${vault_restic}" ${repo[@]+"${repo[@]}"} restore "${snapshot}" --target "${target}" --tag "${tag}"
+
+status=0
+while IFS= read -r git_dir; do
+    work="${git_dir%/.git}"
+    if git -C "${work}" fsck --no-progress >/dev/null 2>&1; then
+        printf 'ok    %s  %s\n' "${work}" "$(git -C "${work}" log --oneline -1)"
+    else
+        printf 'FAIL  %s  git fsck reported errors\n' "${work}" >&2
+        status=1
+    fi
+done < <(find "${target}" -name .git -type d -prune)
+
+printf '\nRestored to: %s\n' "${target}"
+printf 'Copy back only the files you need, then run python3 .scripts/vault-lint.\n'
+exit "${status}"

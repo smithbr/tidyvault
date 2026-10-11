@@ -1,0 +1,20 @@
+# tidyvault config for the bad fixture vault
+modules:
+  - store
+  - pii
+  - false-facts
+  - obsidian
+owner: Robin
+owner_full: "Robin Vale"
+owner_slug: robin-vale
+vault: bad
+lint:
+  proper_nouns: []
+  proper_phrases: []
+  disabled_checks: []
+  read_only_url_patterns:
+    - old-wiki\.example
+  retired_fields:
+    - old_id
+    - old_url
+    - old_db

@@ -1,0 +1,148 @@
+---
+title: Body sections
+type: manual
+---
+# Body sections
+
+Part of the [[README]]. Body sections per type and the Dataview blocks that replace hand-kept lists. Frontmatter is in [[schema]]. Start each new Task, Project, Area, Resource, or Person from its template.
+
+## Every type
+
+1. Frontmatter on line 1, keys in [[schema]] order.
+2. `# Title` on the line right after the closing `---` (no blank line, so Obsidian opens on the title), exactly matching `title`.
+3. Body sections as below, `##` level. Omit a section that would be empty, except where marked required. Add a missing section in the position shown when you first need it.
+4. Views are Dataview DQL blocks copied from this page, plus `dataviewjs` blocks that are exactly one call to a vault view, `await dv.view("Agents/views/<name>", {…})` with string options, such as the [[#Task status view]]. Write no other `dataviewjs` blocks outside `Home.md`.
+
+## Task
+
+Template: [[template-task]]. Real example: `Tasks/answer-ortiz-on-expenses.md`.
+
+| Section | Holds |
+|---|---|
+| (lead paragraph) | Optional. One sentence of context when Details would be overkill. |
+| `## Details` | Context, amounts, dates, caveats, who said what and when |
+| `## Steps` | `- [ ]` lines, only for steps done in the same sitting |
+| `## Log` | One dated line per event, 20 words at most: "Sep 24 — Theo replied." Newest last. |
+
+Links belong in frontmatter `resources`, not a body list.
+
+## Project
+
+Template: [[template-project]]. Example: `Projects/renovate-the-kitchen.md`.
+
+| Section | Holds |
+|---|---|
+| (lead paragraph) | The outcome in one or two sentences: what "done" looks like |
+| `## Status` | The status sheet from the last sweep, below. Rewritten whole on each sweep |
+| `## Tasks` | Required. The [[#Task status view]] block, below: "Remaining" (next actions first), then "Done" (closed tasks, archived ones included) |
+| `## Notes` | Decisions, background, research, history |
+
+```dataviewjs
+await dv.view("Agents/views/task-status")
+```
+
+### Project status
+
+Any agent that sweeps a project (reviews the project and all its tasks: [[role-vault-pm]], or the weekly review's project steps) ends by rewriting its `## Status` section and setting `health` and `last_sweep`. It's where [[= owner =]] sits down to review a project; Home's "Project review" view lists every project by health. Replace the whole section each time; earlier versions live in git and the run logs.
+
+```markdown
+## Status
+
+As of Sep 28, 2026 (vault pm): **at risk**. Why, in a clause.
+
+- **Next:** [[the-next-action]], or who it's waiting on.
+- **Findings:** what this sweep found, a few words each, with links.
+- **Decisions for [[= owner =]]:** each with its question task linked, or "None".
+- **Risks:** what could break, and by when.
+```
+
+At most 8 lines, a few words each ([[naming-and-style#Be brief]]). `health`: `on-track` (moving, nothing needed from [[= owner =]]), `at-risk` (a deadline, money, or a decision is in danger), `blocked` (can't move until [[= owner =]] or someone else acts). Every fact must also live in its task or the project's Notes.
+
+## Area
+
+Template: [[template-area]]. Real example: [[general]].
+
+| Section | Holds |
+|---|---|
+| (lead paragraph) | The standard being maintained, one or two sentences |
+| `## Projects` | Required. Dataview block, below |
+| `## Tasks` | Required. The [[#Task status view]] block of tasks filed directly under the area |
+| `## Someday/maybe` | Bullets; `(revisit YYYY-MM-DD)` at the end when a date matters |
+| `## Notes` | Anything else |
+
+```dataview
+TABLE phase, due, priority
+FROM "Projects"
+WHERE contains(area, this.file.link)
+SORT phase ASC
+```
+
+```dataviewjs
+await dv.view("Agents/views/task-status")
+```
+
+## Resource
+
+Template: [[template-resource]]. Example: `Resources/kitchen-quote.md`.
+
+Sections as the material needs. Guidance by `type`:
+
+| `type` | Shape |
+|---|---|
+| `reference` | Headed sections a reader can jump to. Keep current; date anything that goes stale ("As of Sep 26, 2026"). |
+| `list` | Category headings, bullet items, a link per item when there is one |
+| `document` | A summary, key dates and amounts, then the embed, `![[_files/<note-slug>/file.pdf]]` |
+| `analysis` | Question, findings, recommendation, date |
+| `log` | `date` set. Dated entries, newest last. Add to the existing log on the topic rather than starting one per date |
+| `organization` | `## Key facts` (what it is, contact channels, account admin), `## Timeline` (dated, newest last), and the `## Tasks` Dataview block from the People anatomy |
+
+## Person
+
+Template: [[template-person]]. Real example: [[[[= owner_slug =]]]].
+
+| Section | Holds |
+|---|---|
+| `## Key facts` | Bullets: relationship, role, family, contact, where they live, birthday and other dates to remember |
+| `## Notes` | Anything else worth remembering |
+| `## Timeline` | Dated bullets, newest last |
+| `## Tasks` | The [[#Task status view]] block, below |
+
+```dataviewjs
+await dv.view("Agents/views/task-status")
+```
+
+## Task status view
+
+A vault view. It lists tasks with a status dropdown per row; picking a status writes the task's frontmatter: `status`, `completed` (today, on `done` or `cancelled`; deleted on reopening), `waiting_since` (today, on `waiting-for`), and it deletes `waiting_on` and `waiting_since` when a task leaves `waiting-for`, keeping the keys in [[schema]] order. Nothing else: the [[role-vault-pm]] finishes each change per the task state machine ([[gtd]]), step 4b. A row shows "Saved", or "Changed" (the task's status changed since the page rendered; nothing written), "Moved" (the file is gone), or "Error".
+
+```dataviewjs
+await dv.view("Agents/views/task-status", {status: "next-action", columns: "contexts,due"})
+```
+
+Which tasks it lists comes from the page holding it: a Project (its `project`), an Area (`area`), a Person (`people`, `assignee`, or `waiting_on`), a Resource (those plus `resources`), a Task (itself), or Home and any other page (all of `Tasks/`). Options, every value a quoted string:
+
+| Option | Values | Default |
+|---|---|---|
+| `status` | one status, a comma list (`"inbox,queued"`), or `"open"` (not done or cancelled) | every task in `Tasks/`, closed ones included until they're archived. On a Project: two tables, "Remaining (n)" sorted next-action, waiting-for, queued, inbox, then due; and "Done (n)", closed tasks from `Tasks/` and `Archive/`, newest first |
+| `due` | `"today"`; `"7d"` (overdue or due within 7 days; any number); `"none"` (no due date) | any |
+| `priority` | one priority, or a comma list (`"urgent,high"`) | any |
+| `question` | `"true"`: only tasks with a `Question for [[= owner =]]` line | any |
+| `assignee` | `"roles"`: only tasks assigned to an agent role | any |
+| `hide` | `"roles"`: leave out tasks assigned to an agent role | show them |
+| `sort` | `due`, `priority`, `created`, `waiting_since`, `name` | `due`, then name |
+| `columns` | comma list from `due`, `priority`, `contexts`, `project`, `area`, `for` (project, else area), `waiting_on`, `waiting_since`, `assignee`, `question`, `created` | Project: `due,priority`; Area, Person, Resource, Task: `due`; Home: `project,due` |
+| `group` | `"project"`: one table per project or area | one table |
+
+The script is `Agents/views/task-status/view.js` (styles in `view.css`), the only non-note files outside the file store ([[strict-rules]] I2); only the [[role-vault-admin]] changes it. `vault-lint` allows any one-line call to a view in `Agents/views/<name>/`, string options only, and counts it as the required Tasks block. A new view needs no rule change: add its folder and document it here. With Dataview's JavaScript queries off it shows as a code block ([[troubleshooting]]).
+
+## Archived files
+
+Unchanged body, original fields, plus `archived: true` and `archived_from` ([[procedures]]).
+
+## Manual pages
+
+Frontmatter per [[schema]] (Agents/), then the H1 and a first line naming its place: "Part of the [[README]]."
+
+## Home
+
+`Home.md` is the dashboard the Homepage plugin opens. It holds Dataview views (overdue, project review by health, high or urgent next actions with no due date, questions for [[= owner =]], agents' to-dos, inbox, next actions, waiting for; the last three are the [[#Task status view]], with a status dropdown per task) and at most a short snapshot whose first line carries its date. The [[role-vault-pm]] rewrites the snapshot on each daily and weekly review; no other agent edits it. A fact written there must also live in the Task, Project, Area, Resource, or Person it belongs to.

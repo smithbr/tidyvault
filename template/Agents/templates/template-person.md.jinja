@@ -1,0 +1,39 @@
+---
+title: Person template
+type: template
+---
+# Person template
+
+Part of the [[README]]. Skeleton for a new Person in `People/`. Only for someone [[= owner =]] deals with repeatedly, or a task's `waiting_on` ([[schema]]); a one-off name stays in the Task, Project, Area, or Resource where it came up. Rules: [[organization]], [[schema]], [[body-sections]], [[sensitive-data]].
+
+**Using it:** [[= owner =]] creates a new file in `People/`, and Templater fills it. Agents copy it by hand (the title is the person's name) and save it as `People/<slug>.md`. Both, in detail: [[template-task]]. Then:
+
+- Set `relationship` ([[schema]]).
+- Optional fields: [[schema]].
+- Add `sensitive: true` if the Person holds a birth date, home address, ID numbers, or health detail ([[sensitive-data]]).
+
+<%*
+tR = "";
+let title = tp.file.title;
+if (title.startsWith("Untitled")) title = await tp.system.prompt("Person's name, as [[= owner =]] uses it");
+const slug = title.normalize("NFKD").replace(/[^\x00-\x7F]/g, "").toLowerCase().replace(/'/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+await tp.file.move("People/" + slug);
+-%>
+---
+title: <% title %>
+relationship: other
+created: <% tp.date.now("YYYY-MM-DD") %>
+---
+# <% title %>
+
+## Key facts
+
+## Notes
+
+## Timeline
+
+## Tasks
+
+```dataviewjs
+await dv.view("Agents/views/task-status")
+```

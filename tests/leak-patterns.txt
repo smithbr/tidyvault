@@ -1,0 +1,7 @@
+/Users/[a-z]
+/home/[a-z]+/(Obsidian|Documents|Projects)
+ghp_[A-Za-z0-9]{20,}
+github_pat_[A-Za-z0-9_]{20,}
+sk-[A-Za-z0-9]{20,}
+op://
+AKIA[0-9A-Z]{16}

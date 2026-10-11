@@ -1,0 +1,114 @@
+#!/usr/bin/env python3
+"""sort-inbox — read-only pre-pass for the vault sorter.
+
+    sort-inbox [--root DIR]
+
+Lists `inbox` tasks (oldest first) in three groups: question tasks (answered
+ones to apply), tasks with explicit signals (a project or area that exists, a
+`due`, `waiting_on`, an agent `assignee`), and tasks needing judgment. It never
+writes: even a task with a known project still needs the "work on it now?"
+call (queued vs next-action, `contexts`), so nothing in the sorter role is
+judgment-free (Agents/gtd.md Clarify; Agents/schema.md). Stdlib only.
+"""
+
+import argparse
+import re
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+CLOSED = ("done", "cancelled")
+
+
+def clean(v):
+    v = v.strip().strip('"').strip("'")
+    m = re.match(r"^\[\[([^\]|#]+)", v)
+    return m.group(1) if m else v
+
+
+def parse_fm(text):
+    if not text.startswith("---\n"):
+        return {}, text
+    end = text.find("\n---", 4)
+    if end < 0:
+        return {}, text
+    fm, key = {}, None
+    for ln in text[4:end].split("\n"):
+        m = re.match(r"^([a-z_]+):\s*(.*)$", ln)
+        if m:
+            key, val = m.group(1), m.group(2).strip()
+            fm[key] = clean(val) if val else []
+        elif key and ln.strip().startswith("- "):
+            if not isinstance(fm[key], list):
+                fm[key] = [fm[key]]
+            fm[key].append(clean(ln.strip()[2:]))
+    return fm, text[end + 4:]
+
+
+def as_list(v):
+    return v if isinstance(v, list) else ([v] if v else [])
+
+
+def load(root, folder):
+    return {p.stem: parse_fm(p.read_text(encoding="utf-8", errors="replace"))
+            for p in sorted((root / folder).rglob("*.md"))}
+
+
+def answered(body):
+    return bool(re.search(r"^\*\*Answer\*\*::[ \t]*\S", body, re.M) or re.search(r"^\s*- \[[xX]\]", body, re.M))
+
+
+def main():
+    ap = argparse.ArgumentParser(description="List inbox tasks and the signals the sorter can apply (read-only).")
+    ap.add_argument("--root", default=str(HERE.parent))
+    root = Path(ap.parse_args().root).resolve()
+    tasks, projects, areas = load(root, "Tasks"), load(root, "Projects"), load(root, "Areas")
+    archived = set(load(root, "Archive"))
+    inbox = sorted(((s, fm, body) for s, (fm, body) in tasks.items() if fm.get("status") == "inbox"),
+                   key=lambda t: (t[1].get("created") or "9999", t[0]))
+    qs = [t for t in inbox if "**Question**::" in t[2]]
+    rest = [t for t in inbox if t not in qs]
+    signal, judge = [], []
+    for s, fm, _ in rest:
+        sig, note = [], []
+        proj = fm.get("project") or None
+        if proj:
+            if proj in projects:
+                st = projects[proj][0].get("phase")
+                sig.append(f"project [[{proj}]] ({st})")
+                blockers = [b for b in as_list(fm.get("blocked_by"))
+                            if tasks.get(b, ({}, ""))[0].get("status") not in CLOSED]
+                note.append("queued (blocked_by open)" if blockers else "queued or next-action: work on it now?")
+                if fm.get("area"):
+                    note.append("delete `area` (project set)")
+            else:
+                note.append(f"project [[{proj}]] {'is archived' if proj in archived else 'not found'}")
+        areas_ok = [a for a in as_list(fm.get("area")) if a in areas]
+        if areas_ok and not proj:
+            sig.append("area " + ", ".join(f"[[{a}]]" for a in areas_ok))
+        if fm.get("due"):
+            sig.append(f"due {fm['due']}")
+        if fm.get("waiting_on"):
+            sig.append(f"waiting_on [[{fm['waiting_on']}]]")
+            note.append("waiting-for (needs `waiting_since`)" if not fm.get("waiting_since") else "waiting-for")
+        roles = [a for a in as_list(fm.get("assignee")) if a.startswith("role-")]
+        if roles:
+            sig.append(f"agent task [[{roles[0]}]]")
+        row = f"- [[{s}]] — {fm.get('title')} (created {fm.get('created', '?')})"
+        if sig:
+            signal.append(row + "\n  signals: " + "; ".join(sig) + ("\n  next: " + "; ".join(note) if note else ""))
+        else:
+            judge.append(row + ("\n  next: " + "; ".join(note) if note else ""))
+    P = print
+    P(f"# Inbox pre-pass: {len(inbox)} inbox tasks\n")
+    P("List-only: no step in the sorter role is free of judgment (queued vs next-action, `contexts`, project choice), so nothing is applied.\n")
+    ans = [s for s, _, body in qs if answered(body)]
+    P(f"## Question tasks ({len(qs)}; {len(ans)} answered, apply)\n")
+    P("\n".join(f"- [[{s}]] — answered" for s in ans) or "None answered.")
+    P(f"\n## Explicit signals ({len(signal)})\n")
+    P("\n".join(signal) or "None.")
+    P(f"\n## Needs judgment ({len(judge)})\n")
+    P("\n".join(judge) or "None.")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,23 @@
+---
+title: [[= owner_full =]]
+relationship: self
+created: [[= '%Y-%m-%d' | strftime =]]
+---
+# [[= owner_full =]]
+
+## Key facts
+
+- The vault's owner; the manual calls them "[[= owner =]]".
+
+## Notes
+
+## Timeline
+
+## Tasks
+
+```dataview
+TABLE status, due
+FROM "Tasks"
+WHERE contains(people, this.file.link) OR contains(assignee, this.file.link) OR waiting_on = this.file.link
+SORT due ASC
+```

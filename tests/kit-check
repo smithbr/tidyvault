@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Render the kit twice (every module on, every module off), lint each vault (0 errors, 0 warnings),
+# run the vault's own tests, and grep the kit for leaks.
+# Usage: tests/kit-check [leak-words-file]. Exit 0 only when every step passes.
+set -euo pipefail
+
+kit="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+out="$(mktemp -d "${TMPDIR:-/tmp}/kit-check.XXXXXX")"
+trap 'rm -rf "${out}"' EXIT
+fail=0
+
+render() {  # render NAME [copier -d answers...]
+  local name="$1"; shift
+  copier copy --defaults --quiet -d owner=Robin -d "owner_full=Robin Vale" -d "vault=${name}" "$@" \
+    "${kit}" "${out}/${name}" 2>/dev/null
+}
+render full -d backup=true
+render minimal -d store=false -d pii=false -d false_facts=false -d obsidian=false -d backup=false
+
+for variant in full minimal; do
+  v="${out}/${variant}"
+  if leftover="$(grep -rlE '\[\[[%=!]|\{\{ *(owner|vault|today|kit_version|#if|/if)' "${v}" --exclude-dir=.git)"; then
+    printf 'FAIL %s: unrendered markers in\n%s\n' "${variant}" "${leftover}"; fail=1
+  fi
+  lint="$(cd "${v}" && python3 .scripts/vault-lint 2>&1 || true)"
+  summary="$(awk '/^  total/' <<<"${lint}")"
+  read -r _ errors warnings _ <<<"${summary}"
+  printf '%-8s lint: %s\n' "${variant}" "${summary:-no summary}"
+  if [[ "${errors:-}" != "0" || "${warnings:-}" != "0" ]]; then
+    grep -E ': (error|warning): ' <<<"${lint}" | head -40; fail=1
+  fi
+done
+
+if (cd "${out}/full" && python3 .scripts/tests/run.py >/dev/null 2>&1 \
+    && python3 -m unittest discover -s .scripts/tests -p 'test_*.py' >/dev/null 2>&1); then
+  echo "tests:   ok"
+else
+  echo "tests:   FAIL (run .scripts/tests/run.py and unittest discover in a rendered vault)"; fail=1
+fi
+
+excl=(--exclude-dir=.git --exclude=kit-check --exclude=leak-patterns.txt --exclude=LICENSE --exclude=demo.gif)
+if [[ -n "${1:-}" ]]; then
+  hits="$(grep -rliwFf "$1" "${kit}" "${excl[@]}" || true)"
+  [[ -z "${hits}" ]] || { printf 'FAIL leak words in:\n%s\n' "${hits}"; fail=1; }
+fi
+if hits="$(grep -rlEf "${kit}/tests/leak-patterns.txt" "${kit}" "${excl[@]}" --exclude-dir=fixtures)"; then
+  printf 'FAIL leak patterns in:\n%s\n' "${hits}"; fail=1
+else
+  echo "leaks:   none"
+fi
+
+exit "${fail}"

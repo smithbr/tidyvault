@@ -1,0 +1,173 @@
+#!/usr/bin/env python3
+"""Librarian pre-pass (tidy mode), read-only. Saves the agent reading the whole vault.
+
+  tidy-check                 # orphans, duplicate-looking titles, today's new files
+  tidy-check --today 2026-10-07 --root DIR
+
+Reports:
+  orphans     Resources and People no other note links to (run logs counted apart)
+  duplicates  Resources/People whose titles or aliases look alike (same words, or close spelling)
+  new today   Resources and People with `created:` today: the `Tidy <Mon D> imports`
+              hand-off lines (one linked line each), their inbound link counts, and
+              their broken links
+Links resolve by filename, as in Obsidian. Nothing is written. Python 3 standard library only.
+"""
+import argparse
+import datetime as dt
+import difflib
+import re
+import sys
+from pathlib import Path
+
+CONTENT = ("Tasks", "Projects", "Areas", "Resources", "People", "Archive", "Agents")
+TIDY = ("Resources", "People")
+LINK = re.compile(r"(!?)\[\[([^\]|#]*)(?:#[^\]|]*)?(?:\|[^\]]*)?\]\]")
+STOP = {"the", "a", "an", "of", "and", "for", "to", "in", "on", "my", "notes", "note"}
+
+
+class Note:
+    def __init__(self, path, root):
+        self.rel = path.relative_to(root).as_posix()
+        self.stem = path.stem
+        text = path.read_text(errors="replace")
+        self.fm, self.body = {}, text
+        if text.startswith("---\n"):
+            end = text.find("\n---", 4)
+            if end > 0:
+                self.fm = parse_fm(text[4:end])
+                self.body = text[end + 4:]
+        self.title = self.fm.get("title") or self.stem
+        self.aliases = as_list(self.fm.get("aliases"))
+        self.created = str(self.fm.get("created", ""))
+        self.is_log = self.rel.startswith("Agents/logs/")
+        self.links = [m.group(2).strip() for m in LINK.finditer(text) if not (m.group(1) and has_ext(m.group(2)))]
+
+
+def has_ext(target):
+    return bool(re.search(r"\.(?!md$)[A-Za-z0-9]{1,5}$", target))
+
+
+def unquote(s):
+    s = s.strip()
+    return s[1:-1] if len(s) > 1 and s[0] == s[-1] and s[0] in "\"'" else s
+
+
+def parse_fm(block):
+    """Flat YAML: `key: value`, `key:` + `- item` lines, or `key: [a, b]`."""
+    out, key = {}, None
+    for line in block.splitlines():
+        m = re.match(r"^([A-Za-z_]+):\s*(.*)$", line)
+        if m:
+            key, val = m.group(1), m.group(2).strip()
+            if val.startswith("[") and val.endswith("]"):
+                out[key] = [unquote(x) for x in val[1:-1].split(",") if x.strip()]
+            else:
+                out[key] = unquote(val) if val else []
+        elif key and line.strip().startswith("- "):
+            if not isinstance(out.get(key), list):
+                out[key] = []
+            out[key].append(unquote(line.strip()[2:]))
+    return out
+
+
+def as_list(v):
+    return v if isinstance(v, list) else ([v] if v else [])
+
+
+def load(root):
+    notes = []
+    for top in CONTENT:
+        for p in sorted((root / top).rglob("*.md")) if (root / top).is_dir() else []:
+            notes.append(Note(p, root))
+    if (root / "Home.md").is_file():
+        notes.append(Note(root / "Home.md", root))
+    return notes
+
+
+def target_stem(t):
+    return t.rsplit("/", 1)[-1].removesuffix(".md").strip()
+
+
+def inbound(notes):
+    """stem -> (non-log source rels, log source rels), self-links ignored."""
+    got = {}
+    for n in notes:
+        for t in set(map(target_stem, n.links)):
+            if t != n.stem:
+                got.setdefault(t, (set(), set()))[1 if n.is_log else 0].add(n.rel)
+    return got
+
+
+def words(s):
+    return frozenset(w for w in re.findall(r"[a-z0-9]+", s.lower()) if w not in STOP)
+
+
+def looks_alike(a, b):
+    if not a or not b:
+        return False
+    wa, wb = words(a), words(b)
+    if {w for w in wa if w.isdigit()} != {w for w in wb if w.isdigit()}:
+        return False  # a year series ("Tax records 2013", "Tax records 2014") is not a duplicate
+    if wa == wb:
+        return True
+    if len(wa) >= 2 and len(wb) >= 2 and len(wa & wb) / len(wa | wb) >= 0.75:
+        return True
+    return difflib.SequenceMatcher(None, " ".join(sorted(wa)), " ".join(sorted(wb))).ratio() >= 0.88
+
+
+def duplicates(notes):
+    items = [(n, [n.title] + n.aliases) for n in notes if n.rel.split("/")[0] in TIDY]
+    pairs = []
+    for i, (a, an) in enumerate(items):
+        for b, bn in items[i + 1:]:
+            if a.rel.split("/")[0] != b.rel.split("/")[0]:
+                continue
+            hit = next(((x, y) for x in an for y in bn if looks_alike(x, y)), None)
+            if hit:
+                pairs.append((a, b, hit))
+    return pairs
+
+
+def report(root, today):
+    notes = load(root)
+    stems = {n.stem for n in notes}
+    inb = inbound(notes)
+    tidy = [n for n in notes if n.rel.split("/")[0] in TIDY]
+    out = []
+
+    orphans = []
+    for n in tidy:
+        real, logs = inb.get(n.stem, (set(), set()))
+        if not real:
+            orphans.append(f"- [[{n.stem}]]" + (" (linked only from run logs)" if logs else ""))
+    out += [f"## Orphans ({len(orphans)})", *orphans, ""]
+
+    dups = duplicates(notes)
+    out += [f"## Duplicate-looking ({len(dups)})",
+            *(f"- [[{a.stem}]] ~ [[{b.stem}]] (\"{x}\" / \"{y}\")" for a, b, (x, y) in dups), ""]
+
+    new = [n for n in tidy if n.created == today]
+    d = dt.date.fromisoformat(today)
+    out.append(f"## Created {today} ({len(new)}): Tidy {d.strftime('%b')} {d.day} imports")
+    for n in new:
+        real, logs = inb.get(n.stem, (set(), set()))
+        out.append(f"- [ ] [[{n.stem}]] ({n.rel.split('/')[0]}; {len(real)} inbound"
+                   + (f", {len(logs)} from logs" if logs else "") + ")")
+    out.append("")
+    broken = [f"- [[{n.stem}]]: [[{t}]]" for n in new for t in sorted(set(n.links))
+              if target_stem(t) not in stems and target_stem(t) and not t.startswith("http")]
+    out += [f"## Broken links in those ({len(broken)})", *broken, ""]
+    return "\n".join(out)
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--root", default=str(Path(__file__).resolve().parent.parent))
+    p.add_argument("--today", default=dt.date.today().isoformat())
+    a = p.parse_args()
+    print(report(Path(a.root), a.today))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

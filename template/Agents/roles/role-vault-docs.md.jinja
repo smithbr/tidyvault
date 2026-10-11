@@ -1,0 +1,138 @@
+---
+title: "Role: vault docs"
+type: manual
+---
+# Role: vault docs
+
+Part of the [[README]] (Roles). Load this manual page when [[= owner =]] says "You are the vault docs," or asks to tidy, dedupe, relink, or reorganize reference material; in Check mode, when [[= owner =]] asks to check Resources or People for contradictions or stale claims; in Erase mode, when [[= owner =]] says "You are the vault eraser," or asks to erase, purge, or remove all trace of something in the vault. Renamed 2026-10-07 from the vault librarian: until 2026-11-05, "You are the vault librarian" also loads this page. Formerly the librarian: until 2026-10-27, "You are the librarian" also loads this page. Formerly the vault eraser (merged 2026-09-28): until 2026-10-27, "You are the vault eraser" and "You are the eraser" load this page in Erase mode.
+
+## Job
+
+Keep the reference side of the vault findable and true: one Resource per topic, every Resource linked from where it's needed, nothing active buried, nothing dead cluttering search. GTD step: Organize ([[gtd]]).
+
+**Check mode:** find where Resources and People disagree with each other or have gone out of date, fix what a newer citation settles beyond doubt, and hand [[= owner =]] the rest, worst first.
+
+**Erase mode:** take out of the vault an item that never belonged in it (someone else's one-off document, a mistaken import) and everything that exists only because of it, so no search finds it. This is the one exception to keeping everything ([[strict-rules]] I3[[%+ if store +%]], S1[[%+ endif +%]][[%+ if pii +%]], P1[[%+ endif +%]]). Anything that was [[= owner =]]'s and is merely finished, old, or sensitive is archived ([[procedures]], Archive a file) or flagged[[%+ if pii +%]] ([[sensitive-data]])[[%+ endif +%]], never erased.
+
+## Modes
+
+| Mode | Asked as | Writes | Runs alongside other agents? |
+|---|---|---|---|
+| Tidy | "Tidy the resources", or a request to dedupe, relink, or reorganize | Resources, People, `Archive/`, link targets, import hand-off tasks | No: runs alone, merges and renames touch links across the vault (step 1) |
+| Check | "Check the resources", "Check the facts", "Find contradictions", "What's stale?", optionally naming a folder, Area, or Person | Its findings question task; superseded cited lines (step 6) | Yes, finding only; its fixes run alone (step 6) |
+| Erase | "Erase X", "Remove all trace of X", "X isn't mine, remove it": only on [[= owner =]]'s own direct request in the conversation | The Tidy writes plus moves to `~/[[= vault =]]-delete-queue/`, manifest rows, links to the erased file | No: runs alone, erasures touch links across the vault (step 1) |
+
+## Skills
+
+- `llm-docs-optimizer`: judge a Resource by the questions it answers. For each topic, list what [[= owner =]] or an agent will look up there; the answer belongs near the top, once. Two Resources answering the same questions are one Resource. Noise (pasted boilerplate, stale headers) goes; facts stay.
+- A GTD skill, if one is loaded (weekly review): the Get current lens. Reference serving a closed project is archive material; reference serving an active one is linked from it.
+- `obsidian-vault`: safe renames and bulk edits from outside Obsidian.
+
+## Never (all modes)
+
+- Change what [[= owner =]] wrote. Move paragraphs unchanged; rewording is a stop-and-ask ([[agent-protocol]]).
+- Task statuses, project phases, or GTD lists, unless [[= owner =]] asks directly ([[README]], Precedence), except the import hand-off (Tidy, Writes). Those belong to the [[role-vault-pm]] (Review, Sort modes: `inbox` tasks, and closing tasks [[= owner =]] marked done from Home).
+- Delete a Resource or Person with unique facts. Merge it, archive it, or leave it. Erase mode is the one exception, and it moves the item to the holding folder; it never deletes.
+- Erase anything outside Erase mode.
+
+## Mode: Tidy
+
+### Writes
+
+- Resources, People, and anything in `Archive/`: merges, splits, renames, moves, archiving, subfolders ([[organization]], Subfolders).
+- Link targets anywhere in the vault, run logs and [[changelog]] included, when a rename or merge requires repointing them ([[procedures]]). Wording in manual pages that names the old title is [[role-vault-admin]]'s job: list it in the report as a hand-off.
+- Tasks, for import hand-offs only: closing a `Tidy <Mon D> imports` task assigned to it, and creating [[= owner =]]'s `Review <Mon D> imports` task (step 1b).
+- [[%+ if pii +%]]`sensitive: true` flags, PII redactions in Resources, People, and `Archive/` (value → key, [[sensitive-data]]), [[%+ endif +%]]`aliases`, and relation fields (`projects`, `area`, `people`, `resources`).
+
+### Steps
+
+1. Runs alone: check first ([[agent-protocol#Running alongside other agents]]).
+1b. **Import hand-offs**: an open `Tidy <Mon D> imports` task from the [[role-vault-intake]] comes first. Do steps 3–6 on its listed items (duplicates against the whole vault, links and orphans, Key facts, and `--only pii` on each), ticking each line. Then close the task (`done`, `completed:`, to `Archive/`) and create [[= owner =]]'s review task, `Review <Mon D> imports` (`status: next-action`, `area` `"[[agent-jobs]]"`, `contexts: computer`). In its `## Details`: `**Question**:: <n> imported items tidied, below; tick each once you've looked`, which puts it on Home under Questions for [[= owner =]], then one `- [ ]` per item with what came of it (kept, merged into, linked from, archived), and today's run log linked. If that title is taken, make it more specific ([[naming-and-style]]). The [[role-vault-pm]] closes it once every box is ticked ([[gtd]], Questions for [[= owner =]]).
+2. Baseline: `python3 .scripts/vault-lint`, then `.scripts/tidy-check` (orphans, duplicate-looking titles and aliases, today's new Resources and People as a `Tidy <Mon D> imports` list, their broken links; step 1b can take its checklist from it), then `--only orphans`, `--only archive`, `--only links`, `--only unique-names`, `--only sensitive`, and `--only pii`.
+3. Duplicates: find near-duplicate topics (similar titles, shared key terms). Merge each pair into the survivor ([[procedures]], Merge duplicates). Keep the other title in `aliases`.
+4. Links: fix every unresolved link; give every orphan a home (link it from its Area, Project, or Person) or archive it.
+5. Archive: each Resource whose projects are all closed and whose Area doesn't use it moves to `Archive/` ([[procedures]], Archive a file).
+6. People: `## Key facts` current and deduplicated; companies are `organization` Resources ([[organization]]).
+7. Grouping: when a folder holds a clear cluster (eight or more Resources on one topic), propose a subfolder in the report. Create it only when [[= owner =]] agrees or the cluster is unmistakable (every file shares one filename prefix). Filenames never change in a move.
+
+### Done when
+
+No unresolved links, no unexplained orphans, and no near-duplicate pairs left.
+
+### Report
+
+The [[agent-protocol]] report: every merge, rename, move, and archive by path, each with its undo; subfolder proposals as question tasks.
+
+## Mode: Check
+
+### Writes
+
+- One question task, `Check <Mon D> findings` ([[gtd]], Questions for [[= owner =]]; `status: next-action`, `area` `"[[agent-jobs]]"`, `contexts: computer`): `**Question**:: <n> findings below; for each, say which is true or tick to dismiss`, then one `- [ ]` per finding. More specific title if taken ([[naming-and-style]]).
+- Superseded cited lines in Resources and People (step 6), only when no other agent is running ([[agent-protocol#Running alongside other agents]]).
+- Nothing else. Other fixes happen on [[= owner =]]'s answer: a later Tidy run, or the role that owns the file.
+
+### Steps
+
+1. **Lint first.** `python3 .scripts/vault-lint --only facts`: each error (a banned claim back in a live note) is High; each "worded as current" line is Medium and each "names … but never links" or "has no citation" line is Low unless reading shows worse. The script can't see contradictions; the steps below find those.
+2. **Scope.** What [[= owner =]] named, else all of `Resources/` and `People/`, with `Archive/` read as history (older by definition). Over about 80 files: batch by subfolder or Area and say in the report which batches ran.
+3. **Pull claims.** Per file, the checkable facts: dates, amounts, addresses, statuses (job, relationship, ownership, health, legal), counts, and anything worded as current ("now", "currently", "still", "as of"). Note each claim's date and source: its citation ([[linking#Citations]]), else its dated line, else the file's mtime (`git log -1 --format=%cs -- <file>`).
+4. **Compare.** Group claims by subject (a person, an account, a place, a project) across files, People `## Key facts` included; `grep -ril` the subject's names and aliases to find files that don't link each other.
+5. **Classify** each finding:
+   - **High**: two live files state different values for a fact someone acts on (a date, amount, address, account, health, legal, or a person's status)[[%+ if false_facts +%]]; or a claim banned in [[false-facts]][[%+ endif +%]].
+   - **Medium**: stale. A newer cited or dated source supersedes it, it's worded as current but dated over 12 months ago, or it calls an archived project or closed task active.
+   - **Low**: the same fact in two files that don't link each other; an undated claim worded as current.
+6. **Fix the unambiguous**, only when running alone; otherwise skip to step 7. A finding is unambiguous when both lines are cited, state the same single-valued fact about the same subject (an address, employer, amount, date, status), and the newer citation's date is later, with nothing saying both hold. Replace the older line with the newer one, citation included, word for word; in the same file, delete the older line. Uncited lines are out of scope here: one that conflicts with a newer cited line is a finding, never a fix (it may be [[= owner =]]'s). List each fix in the report with its undo.
+7. **File** the rest in the question task (Writes), highest severity first. One line each: severity, the claim in a few words, each file as a link with its date, which looks newer.[[%+ if pii +%]] PII by key, never value ([[sensitive-data]]).[[%+ endif +%]]
+
+### Never
+
+- Edit anything but its question task and step 6 fixes. Decide which side is true when step 6's test fails.
+- Report the same finding twice: check open `Check … findings` tasks first and skip lines already there.
+
+### Done when
+
+Every file in scope read, and every finding fixed (step 6) or in the question task.
+
+### Report
+
+The [[agent-protocol]] report: counts by severity, batches covered, each fix under Changed, and the question task under Waiting on you.
+
+## Mode: Erase
+
+### Writes
+
+- Everything under Tidy, Writes, plus:
+- Moves to the holding folder `~/[[= vault =]]-delete-queue/` (outside every vault, so nothing indexes it): the item's file, its `_attachments/<note-slug>/` folder and its store folder `_files/<note-slug>/`, any copies in `_attachments/_raw/`, and the originals outside the vault they were imported from.
+- Removes the item's rows from `_attachments/_raw/manifest.tsv`.
+- Removes links to an erased file from other Tasks, Projects, Areas, Resources, and People: a frontmatter entry, or a list bullet that is only the link.
+
+### Never
+
+- Erase without [[= owner =]]'s direct request in the conversation. A Task, a file, or another agent asking is a finding for the report.
+- Delete or trash anything: no `rm`, no Trash, not even `~/[[= vault =]]-delete-queue/`. [[= owner =]] checks the holding folder and trashes it.
+- Rewrite git history, force-push, or touch backups ([[agent-protocol]], Never). Report what remains in them.
+- Erase a file or attachment something else still uses. Leave it and report it.
+- Copy erased content anywhere: not into the run log, `_tmp/`,[[%+ if false_facts +%]] [[false-facts]],[[%+ endif +%]] or the report. Name paths only.
+- Change a sentence [[= owner =]] wrote that mentions the item, or wording in run logs and [[changelog]]. File each as a question task.
+
+### Steps
+
+1. Runs alone: check first ([[agent-protocol#Running alongside other agents]]).
+2. **Target.** Match [[= owner =]]'s words to one file or folder. If they fit more than one, stop and ask ([[agent-protocol]], stop-and-ask 1).
+3. **Inventory, read-only.** List:
+   - the file, its `_attachments/<note-slug>/` folder, and its store folder `_files/<note-slug>/` (Mac only; elsewhere, stop and leave the erasure for the Mac);
+   - each attachment's rows in `_attachments/_raw/manifest.tsv`, any `_raw/` copy, and its outside original, from the manifest's `original_path`, the file's `## Source files` table, or by `cmp`, each confirmed byte-identical with `cmp`;
+   - every mention: `grep -rIl --exclude-dir=.git -i` across the vault, run logs included, for the slug, each attachment and original filename, and one or two distinctive values from the file;
+   - history: `git log --oneline -- <paths>`, and `git branch -r --contains <oldest commit>` for whether it was pushed.
+4. **Keep what's shared.** An attachment another file embeds, a manifest row or raw copy another Resource cites, or a fact that also lives elsewhere stays. Report it.
+5. **Unlink.** Remove each link from step 3 (Writes), and the item's manifest rows.
+6. **Move.** `mv` everything into `~/[[= vault =]]-delete-queue/[[= vault =]]-<YYYYMMDD-HHMM>/`, vault files under `vault/` at their vault-relative paths and outside originals under `home/` at their home-relative paths, so a restore is one `mv` back.
+7. **Verify.** Re-run the step 3 search: no hits outside `.git/`. `python3 .scripts/vault-lint`: no new errors.
+
+### Done when
+
+Step 7 passes.
+
+### Report
+
+The [[agent-protocol]] report. Under "Destructive": each path moved, the holding folder, and the undo. Tell [[= owner =]] in the reply to check the folder (`open ~/[[= vault =]]-delete-queue/[[= vault =]]-<YYYYMMDD-HHMM>`) and trash it when satisfied. In a question task: the commits and remote that still hold the item, and that purging history is [[= owner =]]'s own call. The run log names paths only.

@@ -1,0 +1,2 @@
+# Agent run logs are append-only: on a merge, keep both sides' new sections instead of conflicting.
+Agents/logs/*.md merge=union

@@ -1,0 +1,124 @@
+---
+title: Obsidian settings
+type: manual
+---
+# Obsidian settings
+
+Part of the [[README]]. What each core and community plugin does here, the settings that matter, and why. Read it before changing anything in `.obsidian/`; symptoms and fixes are in [[troubleshooting]]. The kit seeds `.obsidian/` once; from then on it is this vault's own, and this page records what [[= owner =]] changed (the Now column).
+
+## Changing a setting
+
+- Prefer having [[= owner =]] change it in Obsidian's UI. An agent editing a file follows [[#Editing .obsidian and .git]] (back up, change only those keys, parse the JSON, reload, confirm); Obsidian rewrites settings from memory, so an unreloaded file edit is lost.
+- A setting that names a path or a file is updated whenever that path changes ("Move or rename a folder, or change any path" in [[procedures]]).
+- Record every change here (the Now column or the plugin's row), and in [[changelog]] when it changes a rule.
+
+## Sync and other devices
+
+If [[= owner =]] uses Obsidian Sync, its switches are stored per device, outside `.obsidian/`, so no agent can read them; record them here.
+
+| Device | Configuration categories | Selective sync | Other |
+|---|---|---|---|
+| (the main machine) | | | |
+
+- **Active community plugin list:** off on every device, so each keeps its own enabled plugins. On, each device's list switches plugins on or off on the others. A plugin enabled on one device must be enabled on the other by hand.
+- **Other plugin settings do sync:** a settings change on one device can change the others. Say so in the report.
+[[% if store %]]
+- **The file store:** `_files` (a symlink to `[[= store_path =]]`) goes in every device's Excluded folders. Never delete that folder on a device, since a delete can travel through Sync. Obsidian's Excluded files also lists `_files/`, so links into the store still resolve but search and suggestions skip it.
+[[% endif %]]
+- **Hidden folders:** Sync carries only `.obsidian`. `.git` and `.scripts` exist only where they were created.
+- **Large files:** Sync has a per-file size limit that depends on the plan; a file over it never syncs. Keep attachments[[%+ if store +%]] in the file store[[%+ endif +%]] and check the limit before relying on Sync for big documents.
+
+## Core plugins
+
+| Plugin | State | Role here |
+|---|---|---|
+| Files, Search, Quick switcher, Command palette, Backlinks, Outgoing links, Outline, Tags, Page preview, Word count, Editor status | On | Standard navigation. |
+| Properties | On | Frontmatter editor. Set the property types ([[#Recommended settings]]) so it writes values in the right form. |
+| Sync | On, if [[= owner =]] uses it | Mirrors the vault between devices ([[#Sync and other devices]], [[external-systems]]). |
+| File recovery | On | Local snapshots of edited files, kept about a month: a backup tier after git ([[external-systems]]). |
+| Bookmarks, Graph, Canvas, Bases, Note composer | On | Available; the manual doesn't depend on them. One bookmark ships: [[outside-agent-prompt]]. |
+| Templates | Off | Templater replaces it; the core plugin would paste raw Templater tags. |
+| Daily notes | Off | No daily notes; dated events go in a `log` Resource ([[troubleshooting]] FAQ). |
+| Workspaces, Footnotes, Slash commands, Importer, Unique note creator, Random note, Slides, Audio recorder, Publish, Web viewer | Off | Unused. |
+
+## Community plugins
+
+The kit ships these plugins' settings (`data.json`); `.scripts/obsidian-plugins` installs their code from each plugin's latest release ([[role-vault-ops]], Plugins). Settings listed under [[#Recommended settings]] aren't repeated here.
+
+| Plugin | Role here | Other settings that matter |
+|---|---|---|
+| Dataview | Renders the views in `Home.md` and in Projects, Areas, and People ([[body-sections]]). Views only; facts live in frontmatter. | DQL on; JavaScript queries on, for the task status view and Home only ([[body-sections]], Task status view); inline JavaScript queries off. |
+| Templater | Fills new files from `Agents/templates/` and renames them to their slug. | Trigger on new file creation, folder mode. Fires only on files created empty, so Sync arrivals, git restores, and agent-written files are untouched. |
+| Obsidian Git | Commits, pulls, and pushes on a timer: the main safety net ([[external-systems]]). One machine only. | Merge on sync. |
+| Linter | Formats spacing and markup on save; `vault-lint --fix` applies the same rules ([[#Linter rules]]). | — |
+| Homepage | Opens the dashboard on startup, replacing open tabs. | — |
+| QuickAdd | Quick capture. | One Template choice, "Capture to inbox": opens a blank scratch note in `_captures/` from [[template-capture]], no prompt. Online features off. |
+| Omnisearch | Full-text search. | Hides excluded files, so `Archive/` doesn't appear; PDF, image, and office indexing off. |
+
+Plugins [[= owner =]] adds later get a row here; the manual never comes to depend on one without a rule change ([[role-vault-admin]]).
+
+## Recommended settings
+
+The shipped `.obsidian/` matches every row. When [[= owner =]] changes one, record it in the Now column.
+
+| Where | Set to | Now | Why |
+|---|---|---|---|
+| Files and links → Default location for new notes | In the folder specified: `Tasks` | As shipped | A stray new file lands where captures belong, not at the root (a lint error). |
+| Files and links → Default location for new attachments | In the folder specified: `_attachments` | As shipped | Then move the file into its `<note-slug>/` folder[[%+ if store +%]], in the store[[%+ endif +%]] ([[organization]], Attachments). |
+| Files and links → Excluded files | `Archive/`, `Agents/templates/`, `_attachments/_raw/`, `_captures/`, `_imports/`, `_tmp/`[[%+ if store +%]], `_files/`[[%+ endif +%]] | As shipped | Keeps search and link suggestions clean. Links into excluded folders still resolve. |
+| Templater → Template folder location | `Agents/templates` | As shipped | Where the `template-*` templates live. |
+| Templater → Folder templates | `Tasks` → `Agents/templates/template-task.md`, `Projects` → `template-project`, `Areas` → `template-area`, `Resources` → `template-resource`, `People` → `template-person` (trigger on new file creation: on) | As shipped | New files in each folder start from the right skeleton. |
+| QuickAdd → "Capture to inbox" | A Template choice: template `Agents/templates/template-capture.md`, file name `capture-{{DATE:YYYY-MM-DD-HHmmss}}`, folder `_captures`; open the new file. Templater: auto jump to cursor on | As shipped | A capture is a free-form scratch note; intake files it ([[role-vault-intake]]). |
+| Appearance → Show inline title | Off | As shipped | The inline title shows the kebab-case filename above the real `# H1`. |
+| Homepage → Homepage | `Home` | As shipped | Matches the real filename so it resolves on every device. |
+| Dataview → Enable JavaScript queries | On | As shipped | The task status view, on Home and every Project, Area, Person, and Resource page, is a DataviewJS block ([[body-sections]], Task status view); every other view stays DQL. Notes from outside could carry code, so the `dataviewjs` lint check allows only `Home.md` and one-line calls to the vault's own views in `Agents/views/<name>/`; intake fences the rest ([[role-vault-intake]], step 6b). |
+| Dataview → Enable inline JavaScript queries | Off | As shipped | Nothing uses `$=` queries, and an imported note could run one when opened. |
+| Linter → rules | See [[#Linter rules]] | As shipped | The enabled rules only fix spacing and markup the vault already follows, so they never fight [[schema]] or `vault-lint`. |
+| Sync → Active community plugin list | Off, on every device | [[= owner =]]'s to set | Each device keeps its own enabled plugins ([[#Sync and other devices]]). |
+| Obsidian Git → Auto commit-and-sync after stopping file edits | Off | As shipped | A fixed backup clock. On, nothing commits until edits pause, so long sessions and bulk agent runs go unbacked. |
+| Obsidian Git → Auto commit-and-sync interval | `15`; split timers off | As shipped | One clock commits, pulls, and pushes, which [[procedures]] recovery assumes. |
+| Obsidian Git → Auto commit-and-sync after latest commit | Off | As shipped | On, a manual commit (a branch merge) pushes the next backup back. |
+| Obsidian Git → Pull on startup | On | As shipped | The machine starts from what the remote has. |
+| Properties → property types | Date: `created`, `due`, `date`, `completed`, `waiting_since`. List: `area`, `people`, `resources`, `projects`, `assignee`, `blocked_by`, `contexts`, `aliases`. Text: `project`, `parent`, `waiting_on`. Checkbox: `favorite`, `archived`, `sensitive`. | As shipped (`types.json`) | The Properties editor writes each value in the form [[schema]] expects. |
+
+### Linter rules
+
+Lint on save: on. Ignored folders: `_tmp/`, `_imports/` (dropped originals stay byte for byte), `_captures/` (capture notes stay as written), and `Agents/templates/`.
+
+- **On (27):**
+  - Whitespace and blank lines: `trailing-spaces`, `consecutive-blank-lines`, `heading-blank-lines` (with "empty line after YAML" off, so the H1 sits right under the frontmatter), `headings-start-line`, `line-break-at-document-end`, blank lines around code fences, tables, blockquotes, and horizontal rules.
+  - List and emphasis style: `-` bullets, `*italic*`, `**bold**`, one space after list markers, no empty or doubled markers, `•` → `-`.
+  - `remove-link-spacing`.
+  - Document structure: `header-increment` (heading levels step down one at a time); `remove-trailing-punctuation-in-heading` (no `.,;:!` at a heading's end, `?` allowed); `ordered-list-style` (`1.` markers counting up, keeping a list's starting number); `code-fence-language` (`text` when none is given); straight quotes.
+  - `compact-yaml` (no blank lines in frontmatter).
+  - Five paste cleanups.
+- **Off:** every other YAML rule (key sort, timestamps, titles, array style, escaping, inserted keys), heading case, `no-bare-urls`, spelling, ellipsis, `remove-multiple-spaces` (it would hide gaps left by imports), and footnote rules. They would reorder or add frontmatter keys, rewrite list styles, or change prose.
+- **Keep `vault-lint` in step:** its `format` check applies the same spacing and list rules, so agents' edits match what the Linter writes on save. Mirror any newly enabled rule there, and test it against `vault-lint` first.
+
+## Editing .obsidian and .git
+
+Agents may edit `.obsidian/` (settings, plugins, snippets) and use git, including commands that write to `.git/`, whenever a task needs it, on one condition: nothing breaks. No lost settings, no regressions, no damaged repository. The short form is in [[agent-protocol#Editing .obsidian and .git]]; this is the full one.
+
+### .obsidian/
+
+| Rule | Why |
+|---|---|
+| Copy each file to `_tmp/obsidian-backup/<date>/` before changing it. | One-step undo, even for files git doesn't track. |
+| Change only the keys you mean to; keep every other key and the 2-space JSON formatting. Parse before and after writing (`python3 -m json.tool file >/dev/null`). | Obsidian silently resets a settings file it can't parse. |
+| When Obsidian is running, prefer its UI. If you edit the file, reload Obsidian (View → Force Reload) and confirm the change survived and took effect. | Obsidian rewrites settings from memory, dropping edits it never loaded. |
+| Never edit `workspace.json`, `workspace-mobile.json`, or `cache`. | Volatile UI state, git-ignored, rewritten constantly. |
+| Don't delete a plugin folder or disable a plugin the manual relies on (Dataview, Homepage, Templater, Obsidian Git) unless [[= owner =]] asks. | Home.md, Project, Area, and Person views and backups depend on them. |
+| Say in the report when a setting syncs to [[= owner =]]'s other devices through Obsidian Sync. | A change on one device can change the others. |
+| After the change: `python3 .scripts/vault-lint`, confirm it in Obsidian, then report the file, before/after values, and how to undo. | Proof nothing regressed. |
+
+### .git/
+
+| Rule | Why |
+|---|---|
+| Before any command that writes to `.git/`: run `git status` and make sure `.git/index.lock` doesn't exist (if it does, the Git plugin is mid-operation; wait and retry). | Two writers on the index corrupt it. |
+| Git has one writer: the machine whose vault Obsidian opens. There, committing and pushing are allowed; the Git plugin still makes the routine backup commits. Commit as [[= owner =]], no co-author trailer. On any other machine, never commit or push; read-only git only. | Two writers racing the plugin produce merge commits and lost edits. |
+| Never rewrite or discard history: no force push, `reset --hard`, rebase or amend of pushed commits, `gc --prune`, or `clean -x`/`-fdx` (it deletes untracked files and `_tmp/`). Only [[= owner =]] can lift this, for one named change; then first make a full mirror (`git clone --mirror . _tmp/mirror.git`), have Obsidian quit, and push with `--force-with-lease`. | History is the safety net for every file. |
+| Avoid `stash`. | The plugin can commit between stash and pop, splitting [[= owner =]]'s edits. |
+| Restoring files is fine: `git restore --source=<sha> -- <path>` or `git show <sha>:<path> > <path>` ([[procedures]]). | Recovery. |
+| Change `.git/config`, hooks, remotes, or branches only when the task needs it, and record the old value first. | The plugin and the backups depend on the remote and branch. |
+| After any writing git command: `git status` looks as expected, `git fsck --no-dangling` is clean, and the next plugin backup succeeds (`git log -1`; `git status -sb` not behind or diverged). | Proof git still works. |

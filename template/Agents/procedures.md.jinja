@@ -1,0 +1,185 @@
+---
+title: Procedures
+type: manual
+---
+# Procedures
+
+Part of the [[README]]. Step-by-step recipes for changes that touch more than one file. Each ends with `python3 .scripts/vault-lint` and a report line. Every command runs from the vault root. Destructive steps go under "Destructive" in the report ([[agent-protocol]]).
+
+## Create a file
+
+1. Search first: `grep -ril "<key words>" Tasks Projects Areas Resources People Archive`, and `find . -name '<slug>.md' -not -path './.*'`.
+2. If a match exists, update it (or reopen it from `Archive/`) instead.
+3. Copy the skeleton from the matching `template-*` template in `Agents/templates/`. Fill `title`, the H1, and the slug filename ([[naming-and-style]]). Set `created` to today.
+4. Replace every Templater tag (angle-bracket percent-sign tags) with its value. None may remain outside `Agents/templates/`; Templater may execute them when the file appears in Obsidian.
+5. Close the loops: link the task to its Resources and project, and so on ([[linking]]).
+6. Lint.
+
+## Rename a file (outside Obsidian)
+
+Inside Obsidian, its own rename updates links. Everywhere else, do all of this in one change:
+
+1. Pick the new title; compute the new slug. Confirm no file anywhere has that slug.
+2. `mv Tasks/old-slug.md Tasks/new-slug.md` (plain `mv`, never `git mv`).
+3. Update `title:` and the `# H1` in the renamed file. If [[= owner =]] or other files may still use the old name, add it to `aliases`.
+   If `_files/old-slug/` exists in the store (Mac only), `mv` it to `_files/new-slug/` and rewrite `_files/old-slug/` to `_files/new-slug/` in every note (store embeds carry the folder) and in the manifest's `filed_path`. Where the store isn't attached, stop and leave the rename for the Mac.
+   If `_attachments/old-slug/` exists, `mv` it to `_attachments/new-slug/` (embeds use the filename, so they keep working), and in the same change rewrite `_attachments/old-slug/` to `_attachments/new-slug/` in the `filed_path` column of `_attachments/_raw/manifest.tsv`.
+4. Rewrite every link to it across the vault: `[[old-slug]]`, `[[old-slug|text]]`, `[[old-slug#Heading]]`, `![[old-slug]]`, and folder-qualified forms like `[[Tasks/old-slug]]`, in frontmatter and body:
+
+   ```bash
+   python3 - old-slug new-slug [--dry-run] <<'EOF'
+   import pathlib, re, sys
+   old, new = sys.argv[1:3]
+   dry = "--dry-run" in sys.argv
+   pat = re.compile(r"(!?\[\[)(?:[^\]|#^]*/)?" + re.escape(old) + r"(?=[\]|#^])", re.I)
+   for p in pathlib.Path(".").rglob("*.md"):
+       if (any(part.startswith(".") for part in p.parts)
+               or p.parts[0] in ("_imports", "_captures", "_tmp") or p.parts[:2] == ("_attachments", "_raw")):
+           continue  # hidden folders, _imports/, _captures/, _tmp/, _attachments/_raw/
+       s = p.read_text()
+       t = pat.sub(lambda m: m.group(1) + new, s)
+       if t != s:
+           print("would update" if dry else "updated", p)
+           if not dry:
+               tmp = p.with_name(".tmp-" + p.name)
+               tmp.write_text(t)
+               tmp.replace(p)  # temp file + mv (agent-protocol)
+   EOF
+   ```
+
+   Over 10 files: `--dry-run` first ([[agent-protocol]]). Whoever runs the rename may repoint link targets anywhere, since it is mechanical; that includes `Agents/logs/` and [[changelog]], the one allowed edit to history ([[agent-protocol]], Run log).
+
+5. This returns nothing (inline `aliases:` lines are expected):
+
+   ```bash
+   grep -rn "old-slug" --include='*.md' --exclude-dir='.*' --exclude-dir=_imports --exclude-dir=_captures --exclude-dir=_tmp --exclude-dir=_raw --exclude-dir=logs --exclude=changelog.md . | grep -v 'aliases:'
+   ```
+
+   Plain-text mentions of the old title in `Agents/` manual pages change wording, which is [[role-vault-admin]]'s job (with the [[changelog]] line): unless you are the vault admin, list them in the report for it.
+   Settings can name a file too (a Templater folder template, the Homepage note): run the config sweep in [[#Move or rename a folder, or change any path]] for `old-slug.md`.
+6. Lint. Report: "Renamed `old-slug` → `new-slug`, N files relinked."
+
+## Move a file to another folder
+
+1. Confirm the destination with the table in [[organization]].
+2. `mv` the file, into a subfolder if one fits ([[organization]]). The filename doesn't change, so links keep working.
+3. Rewrite the frontmatter to the destination folder's schema: drop fields it doesn't allow, add required ones (for example, a Task promoted to a Project swaps `status` for a `phase` from the project list and needs an `area`).
+4. Lint. Report it.
+
+## Move or rename a folder, or change any path
+
+Paths live outside the vault's content, in files Obsidian's own rename never touches. A stale one fails silently: an excluded folder that no longer exists, a template folder that points nowhere, a lint rule that skips the wrong place. Whenever a folder is moved or renamed, or a file that settings point to is renamed, do all of this in the same change:
+
+1. Sweep every file, dot-folders included, for the old path:
+
+   ```bash
+   grep -rnI "old/path" . --exclude-dir=.git --exclude-dir=.smart-env --exclude-dir=_tmp --exclude=main.js --exclude='workspace*.json'
+   ```
+
+2. Update each hit. The usual places:
+
+   | File | Holds paths for |
+   |---|---|
+   | `.obsidian/app.json` | Excluded files (`userIgnoreFilters`), attachment folder, new-note location |
+   | `.obsidian/plugins/templater-obsidian/data.json` | Template folder, folder templates |
+   | `.obsidian/plugins/obsidian-linter/data.json` | Folders the Linter ignores |
+   | `.obsidian/plugins/*/data.json` (any other) | Homepage note, Dataview, Obsidian Git, and so on |
+   | `.obsidian/templates.json`, `daily-notes.json` | Core plugin folders, if those plugins are used |
+   | `.scripts/vault-lint`, its tests, `.scripts/README.md` | Layout constants and exemptions |
+   | `.gitignore` | Ignored paths |
+   | `AGENTS.md`, `llms.txt`, `Agents/` manual pages | The map, the doc index, recipes |
+   | Files with Dataview queries (`Home.md`, Project and Area views) | `FROM "Folder"` sources |
+
+3. Edit `.obsidian/` files under [[agent-protocol#Editing .obsidian and .git]]: back up, change only those keys, parse the JSON, have Obsidian reloaded.
+4. Run the grep again: only history ([[changelog]], `Agents/logs/`) may still name the old path.
+5. Lint. Report every config file changed, with the old and new value, and a dated line in [[changelog]] when a rule's path changed.
+
+## Add a local rule
+
+When [[= owner =]] says "from now on…" about this vault ([[role-vault-admin]], Kit-managed files).
+
+1. Restate the rule in one sentence. It must not break an invariant or module rule ([[strict-rules]]); if it would, ask [[= owner =]].
+2. Append it to [[local-rules]] under `## Rules` with the next free ID: `- **L3. <rule>.** <scope, optional>`.
+3. Create any folder or file the rule names; a word list or check it needs goes in `.tidyvault.yml`'s `lint:` section. A mode a role gains goes in `Agents/local/roles/role-<name>-local.md` with its own Writes list; a system the vault connects to gets its row in `Agents/local/external-systems-local.md`.
+4. Add a dated line to [[changelog]]: `- **YYYY-MM-DD** — L3: <rule, short>.`
+5. Lint the changed files, then the whole vault: no new errors.
+
+## Update from the kit
+
+Brings in a new tidyvault version: the manual, `vault-lint`, roles, templates, `.claude/`. [[role-vault-admin]] only, alone ([[agent-protocol#Running alongside other agents]]).
+
+1. `git status` is clean (Copier refuses a dirty tree): let the git plugin's backup commit land, or commit the pending changes as [[= owner =]] ([[agent-protocol#Editing .obsidian and .git]]).
+2. Baseline lint. Note the version in `.copier-answers.yml` (`_commit`).
+3. From the vault root: `copier update` (a named version: `--vcs-ref <tag>`). Copier re-renders the kit files and merges any hand edit with the new version; seeds (`Home.md`, `People/`, `Areas/`, `Resources/`, `.obsidian/`, [[changelog]][[%+ if pii +%]], [[pii-allowlist]][[%+ endif +%]], `Agents/local/`) are left alone.
+4. Resolve conflicts: `grep -rln '^<<<<<<< ' . --exclude-dir=.git`, and any `*.rej` files. Keep the kit's text; move anything vault-specific into [[local-rules]].
+5. Review `git diff --stat`; lint, with no new errors. Run `python3 .scripts/tests/run.py`.
+6. Add a dated line to [[changelog]]: the old and new version, and any local edit moved to [[local-rules]]. Report the pages that changed.
+
+## Archive a file
+
+For closed tasks, finished projects, retired resources, and people [[= owner =]] no longer deals with.
+
+For closed tasks still in `Tasks/`, `python3 .scripts/vault-lint --archive-closed` does steps 1 to 5 for all of them at once (`--dry-run` shows the plan); it never moves a project. Then do step 6.
+
+1. For a task: `status` is `done` or `cancelled` and `completed` is set. For a project: every task is closed and archived first, then `phase` and `completed` are set.
+2. `mv Tasks/reply-to-dad.md Archive/reply-to-dad.md`. The filename never changes and gets no prefix. A file in a subfolder goes to the top of `Archive/` too.
+3. Add `archived: true` and `archived_from: Tasks` (the top-level folder it came from), placed per the key order in [[schema]]. If `completed` is missing, set it to the date [[= owner =]] gave, else today.
+4. Keep every other field and the whole body as they are. The `title` gets no "(Archived)" prefix.
+5. Links stay valid because the filename didn't change. Nothing else to rewrite.
+6. Lint. Report it under "Destructive" with the undo.
+
+Closing a project also sorts its material, as PARA prescribes. For each Resource whose `projects` includes the closed project:
+
+- It also serves another active project, or has lasting value for an Area (a reference you'd look up again, like `career-history`): keep it in `Resources/`; make sure its `area` is set.
+- It only mattered for this project (a trip grocery list, a one-time budget plan): archive it with the project.
+
+People stay in `People/`; archive a person only when [[= owner =]] no longer deals with them.
+
+**Unarchive:** move it back, delete `archived` and `archived_from` (and `completed` if reopening a task), set a live `status` (a project: `phase`).
+
+## Merge duplicates
+
+1. Pick the survivor: the file more other files link to; on a tie, the older `created`. If one of the two is archived, the topic decides instead: still active (open tasks or projects link to it, or it was edited recently) → the live one survives; retired → the archived one survives and the merged result stays in `Archive/`. Not sure which → merge nothing and file the pair as a question task.
+2. Move every unique fact from the other file into the survivor, unchanged in wording, under the right section. Union the frontmatter link lists and `aliases`; add the loser's title to `aliases`. Keep the survivor's `type`, `created`, and `title`. Move any files in `_attachments/<loser-slug>/` and `_files/<loser-slug>/` into the survivor's folders, updating their `filed_path` rows in `_attachments/_raw/manifest.tsv` and repointing `_files/` embeds.
+3. Rewrite links from the loser's slug to the survivor's with the rename script above (old = loser, new = survivor).
+4. Delete the loser. Note the last commit that has it: `git log -1 --format=%h -- <path>`.
+5. Lint. Report: "Merged A into B; deleted A. Last version: `git show <sha>:<path>`."
+
+If the two files contradict each other on a fact, keep both statements, flag the conflict in the survivor's body, and file it as a question task.
+
+## Delete a file
+
+Only for empty files, exact duplicates (after merging), test junk, and captures that clarify to "not worth keeping". Anything with history worth keeping is archived instead. To remove an item that never belonged in the vault, with its attachments and originals, [[= owner =]] asks for an erasure ([[role-vault-docs]], Erase mode).
+
+1. Confirm nothing links to it: `grep -rln "\[\[slug" --include='*.md' .` Remove or repoint any links.
+2. Record the last commit that has it: `git log -1 --format=%h -- <path>`.
+3. Delete the file. Don't delete its attachments unless nothing else embeds them and `_attachments/_raw/manifest.tsv` doesn't list them; a listed one is the only copy of an imported original, so it moves to the note that keeps its facts, or stays with the file archived instead ([[organization]], Attachments).
+4. Lint. Report under "Destructive" with the recovery command.
+
+## Split a file
+
+When one Task, Project, Area, Resource, or Person covers two items. Create the new one from its template, move the relevant content unchanged, link the two if they relate, repoint any links that were about the moved part. Lint. Report.
+
+## Recover a file from history
+
+Git keeps every committed version (the Git plugin commits every 15 minutes). Read-only commands:
+
+```bash
+git log --follow --oneline -- Tasks/answer-ortiz-on-expenses.md   # every version
+git show <sha>:Tasks/answer-ortiz-on-expenses.md                   # print one version
+git log --diff-filter=D --oneline -- 'Tasks/*.md'                   # commits that deleted tasks
+git show <sha>^:Tasks/some-deleted-note.md                          # the version before deletion
+```
+
+To restore: `git restore --source=<sha> -- <path>`, or redirect `git show` output into the file path (`git show <sha>:path > path`), then lint and report. Avoid `reset` and `stash`; see [[agent-protocol#Editing .obsidian and .git]].
+
+Older than git, or git itself damaged: Obsidian Sync (if used) keeps version history, File recovery in Obsidian keeps local snapshots[[%+ if backup +%]], and restic keeps nightly snapshots ([[vault-backup-and-restore]])[[%+ endif +%]]. Those are [[= owner =]]'s to run.
+[[% if pii %]]
+
+## Redact PII
+
+1. Pick the key, `<person-slug>.<category>.<label>`; reuse the existing one if the stub [[pii-register]] already lists this value.
+2. Replace the value with `[[pii-register#<Person>|🔒 <key>]]`. A health, legal, or intimate passage becomes a one-line summary plus its key.
+3. Add the key under the person in the stub, and the row with its value to `_files/_private/pii-register-queue.md` (Mac only); update the **Add PII register rows** task.
+4. Set `sensitive: true`. Report the key, never the value. See [[sensitive-data]].
+[[% endif %]]

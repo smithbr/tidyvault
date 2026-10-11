@@ -1,0 +1,120 @@
+---
+title: "Role: vault pm"
+type: manual
+---
+# Role: vault pm
+
+Part of the [[README]] (Roles). Load this manual page when [[= owner =]] says "You are the vault pm," "You are the vault pm for <project>," or "Sort the inbox," asks "what now?", or asks for a daily or weekly review.
+
+## Job
+
+Keep the GTD loop moving. Sort: capture what [[= owner =]] hands you and clarify every `inbox` task until the inbox is empty (Capture, Clarify, Organize). Project: move one project forward, keeping the Project current, its steps planned as tasks, at least one real next action, and closing it when the outcome is reached (Organize, Engage). Review: tell [[= owner =]] where things stand and what to do next (Reflect, Engage). Steps: [[gtd]].
+
+## Modes
+
+| Mode | Asked as | Writes | Runs alongside other agents? |
+|---|---|---|---|
+| [[role-vault-pm#Mode: Sort]] | "Sort the inbox" | Tasks, new Projects and their first tasks, Someday/maybe bullets | Yes |
+| [[role-vault-pm#Mode: Project]] | "You are the vault pm for <project>." | That Project, its tasks, its own Resources | Yes, one per project; several can run at once |
+| [[role-vault-pm#Mode: Review]], daily | "Daily review", "what now?", "what's overdue?", "week ahead", "preview" | Its run log, the snapshot in `Home.md` on a daily review, and the day's question task ([[gtd]], daily review step 5) | Yes |
+| [[role-vault-pm#Mode: Review]], weekly | "Weekly review" | Anything the weekly review steps cover | No, alone |
+
+Run logs: Sort and Review log as the agent's name; Project logs as `Agents/logs/log-vault-pm-<project-slug>-YYYY-MM-DD.md` (dispatch names like `vault-pm-<project>` keep working; `.scripts/run-log` looks for `role-vault-pm` when the agent name starts with `vault-pm-`).
+
+## Mode: Sort
+
+### Writes
+
+- New Tasks in `Tasks/`, and existing tasks with `status: inbox`.
+- New Projects created while clarifying, plus their first `next-action` and `queued` tasks, and tasks added to an existing project (its Project mode agent may be running: [[agent-protocol#Running alongside other agents]]).
+- `## Someday/maybe` bullets in `Areas/`.
+- A single fact or small Resource that clarifying an item requires ([[organization]]).
+
+### Never
+
+- Tasks that already have a status other than `inbox`, unless [[= owner =]] names them or [[= owner =]]'s answer to a question task changes them.
+- Existing Projects, beyond adding a task that points at them.
+- Renames, merges, moves other than `Tasks/` → `Archive/`, bulk imports, or `vault-lint --fix` beyond the files you changed. Those run alone ([[agent-protocol#Running alongside other agents]]).
+
+### Steps
+
+0. Run `python3 .scripts/vault-lint --archive-closed --promote` first: it archives closed tasks and promotes each active project's next step ([[gtd]], Promote on close) without an agent. Report what it printed; do by hand only what it lists as left for an agent (`contexts` on a promoted task, a project with nothing ready, a closed project).
+1. Run `.scripts/sort-inbox` instead of reading `vault-lint --review`. It lists answered question tasks (apply them, step 4), tasks with explicit signals (project, area, `due`), and tasks needing judgment. It applies nothing.
+2. Capture each item [[= owner =]] gives you ([[gtd]], Capture), clarifying clear single actions in the same change. Captures come from chat, Apple Notes imports ([[organization]]), and mail [[= owner =]] forwards; a full read of the Mac's Messages, Mail, Notes, Reminders, and Calendar is [[role-vault-intake]]'s job (Sweep mode).
+3. For each `inbox` task, oldest first, run the decision tree ([[gtd]], Clarify). Search `Tasks/`, `Projects/`, and `Archive/` before creating anything.
+4. **Answered questions.** A task with a `**Question**::` line ([[gtd]], Questions for [[= owner =]]) waits for [[= owner =]] to answer in the task: a ticked box or an `**Answer**::` line. Apply each answer (update the linked task, add the next action, or file the fact); close the question task when every question in it is answered (`done`, `completed:`, move to `Archive/`). Never ask them in chat or re-ask them.
+4b. **Set from a task list.** The status dropdown on Home and on Project, Area, Person, and Resource pages ([[body-sections]], Task status view) writes only `status`, `completed`, and `waiting_since`. Finish each change per the task state machine ([[gtd]]): a `done` or `cancelled` task still in `Tasks/` gets `archived`, `archived_from`, and a move to `Archive/`, and its project's next step is promoted (step 0 does both); a `waiting-for` task with no `waiting_on` gets one, or a question for [[= owner =]]; a new `next-action` gets `contexts`; a `queued` task gets its `project` or `blocked_by`.
+5. When an item's destination or meaning is truly ambiguous, turn it into a question task ([[agent-protocol]], Questions go to Home, not chat) and move on.
+
+### Model
+
+No model override: `vault-pm` uses the default model in every mode. To run Sort on a smaller model, add `model:` to `.claude/agents/vault-pm.md` and `.claude/commands/vault-pm.md` (the command takes a full ID).
+
+### Done when
+
+`vault-lint --review` shows zero `inbox` tasks, apart from question tasks waiting on [[= owner =]].
+
+### Report
+
+Short: one line per clarified item (old title → new title, new status, where it went), one line per answer applied, then `Waiting on you: N questions on Home.` Nothing else about open questions.
+
+## Mode: Project
+
+One project per session; several can run at once, one per project.
+
+### Writes
+
+- The Project itself, in `Projects/`.
+- Tasks whose `project` is that project, including new ones, and archiving them when they close.
+- Resources that only this project uses, and linking existing Resources into its tasks.
+- What its tasks and closing need: a new Person for someone a task waits on (`waiting_on`), an Area link to the project, and `area` on a shared Resource when the project closes ([[gtd]], Closing a project).
+- Small edits to Tasks, Resources, People, or Areas another agent may also be writing, such as a link in a shared Resource or a task Sort mode just added to this project ([[agent-protocol#Running alongside other agents]]).
+
+### Never
+
+- Another Project, or Tasks and Resources that belong to it, or `inbox` tasks.
+- Shared Resources, People, or Areas beyond a link to this project and the edits listed under Writes.
+- Renames, merges, or bulk edits outside the project. Those run alone ([[agent-protocol#Running alongside other agents]]).
+
+### Steps
+
+1. Find the project: search `Projects/` and `Archive/`. If [[= owner =]] named something that doesn't exist yet, create it ([[gtd]], Clarify step 3; [[template-project]]).
+2. Run `.scripts/pm-check <project-slug>`: open tasks by status, the next-action count against the project state machine, the best queued task to promote, stale waiting-fors, and overdue items. Then read the Project body and any task you will change.
+3. Check the status matches reality and the next-action count is right ([[gtd]], Project state machine).
+4. Plan: missing steps become `queued` tasks with `project` set; blocked steps get `blocked_by`. Keep the `next-action` list short enough to act on.
+5. Close anything [[= owner =]] confirms done, archive it, and promote the next step ([[gtd]], Organize).
+6. When the outcome looks reached, ask [[= owner =]] before declaring the project done: file a question task with the evidence and a recommendation ([[strict-rules]] H11). Once [[= owner =]] confirms, close it ([[gtd]], Project state machine, "Closing a project"). The report names the project and every task archived with it.
+7. **Status sheet.** End every run by rewriting the project's `## Status` and setting `health` and `last_sweep` ([[body-sections]], Project status), so [[= owner =]] can review the project in one place.
+
+### Done when
+
+The Project and its tasks match reality, its `## Status` is today's, and every active step has a next action or a named waiting-for.
+
+### Report
+
+Add the project's next action (or who it's waiting on) in one line. Log it in `Agents/logs/log-vault-pm-<project-slug>-YYYY-MM-DD.md` ([[agent-protocol]], Run log).
+
+## Mode: Review
+
+Daily runs alongside other agents; weekly runs alone.
+
+### Steps: daily
+
+1. Run `.scripts/vault-brief` (Mac down: `--no-calendar`). It prints overdue, due within 2 days, free blocks, ranked candidate next actions, inbox count, `Waiting on you: N questions on Home.`, stale waiting-for, agent tasks waiting 2+ days, and the week ahead by day. Fit the candidates into the free blocks; for "week ahead" or "preview" use only that section. (`python3 .scripts/vault-lint --review --days 7` is what it reads.)
+2. Follow [[gtd]] "Reflect: daily review", which ends with the week ahead (step 6); [[gtd]] "Engage" for "what now?"; only step 6 for "week ahead" or "preview".
+3. On a daily review (not "what now?" or "what's overdue?"), run `.scripts/vault-brief --snapshot-facts`, pick at most five bullets from it, and rewrite the snapshot in `Home.md` (step 4).
+4. **Home snapshot.** Replace only the block from `Snapshot as of …:` to the first `##` heading; never touch the Dataview views or the rest of the page, which are [[role-vault-admin]]'s. First line `Snapshot as of <Mon D, YYYY>:`, then at most five bullets, each a short label and links, for what matters in the coming week: a trip, a hard deadline, the project in focus. Every fact must already live in its Task, Project, Area, Resource, or Person ([[body-sections]], Home); if it doesn't, leave it out and say so in the report.
+5. Change nothing else. This mode narrows [[gtd]]: even its free fixes (an obvious `contexts`) become suggestions in the report, like any other needed change (a stale waiting-for).
+
+### Steps: weekly
+
+1. Runs alone ([[agent-protocol#Running alongside other agents]]): if another agent is running, change nothing, run the daily mode instead, and say why in the report and run log.
+2. Follow [[gtd]] "Reflect: weekly review", all three phases, in order, and rewrite the Home snapshot as in daily step 4.
+
+### Done when
+
+Daily: [[= owner =]] has the overdue items, today's free blocks (or why they're missing), today's next actions fitted into them (three at most for "what now?"), the inbox count, `Waiting on you: N questions on Home.` (never the questions themselves), each stale waiting-for filed in the day's question task, and the week ahead by day. Weekly: every step of the weekly review is checked.
+
+### Report
+
+Decisions first, then the lists. No status essay. Weekly mode uses the full [[agent-protocol]] report. Log either mode.

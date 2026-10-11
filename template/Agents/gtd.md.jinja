@@ -1,0 +1,214 @@
+---
+title: GTD
+type: manual
+---
+# GTD
+
+Part of the [[README]]. How Getting Things Done runs in this vault: definitions, the clarify tree, the status state machines, reviews, and queries. Field formats are in [[schema]].
+
+## Definitions
+
+| Term | In this vault | Test |
+|---|---|---|
+| Inbox item | A task with `status: inbox` | Captured, not yet clarified. Clarifying always moves it out of `inbox`, so the inbox count is the real backlog. |
+| Queued step | A task with `status: queued` | Clarified, not active yet: a later step of its `project`, or waiting on a `blocked_by` task |
+| Next action | A task with `status: next-action` | Physical, visible, verb first, doable in one sitting without more thinking. "Call Ortiz's office about closing date", not "Estate stuff". |
+| Project | A file in `Projects/` | More than one action, finishable within about a year. The title names the finished state. |
+| Area | A file in `Areas/` | A standard with no end date (`[[money]]`, health, family). Never archived for being done. |
+| Someday/maybe | A bullet under an Area's `## Someday/maybe` | Might do, not committed. There is no someday status. |
+| Waiting for | A task with `status: waiting-for` | Someone else owes the next move. |
+| Context | The `contexts` field | Where or with what it can be done. `agenda` means "raise with a person" and needs `people` set. |
+| Hard date | The `due` field | A real deadline (filing date, flight, late fee), never an aspiration. |
+| Tickler | `(revisit YYYY-MM-DD)` at the end of a Someday/maybe bullet | Surfaced by the weekly review on that date. Not a `due`. |
+
+## Capture
+
+- [[= owner =]]'s new entries are usually tasks, captured with QuickAdd (Cmd+Shift+I): a blank scratch note in `_captures/` ([[template-capture]]) that the [[role-vault-intake]] files as a task or whatever it is. Agents create the other types (projects, areas, resources, people) while clarifying and organizing, and do all maintenance. [[= owner =]] may still make any of them by hand; an agent that finds one finishes it to the schema and links it, without second-guessing that it exists.
+- Anything [[= owner =]] needs to do becomes a task from [[template-task]] with `status: inbox` and a best-guess `area`, so it is never orphaned. A task with no `area` (lint flags it, which marks it unclarified) gets a best-guess `area` from the first agent that touches it, even if it stays `inbox`.
+- If [[= owner =]]'s words already make it one clear action ("Remind me to call the dentist"), clarify it in the same change and file it as `next-action` with `contexts`. Leave it `inbox` only when something is genuinely unclear.
+- "Remind me" does not mean `due`; the vault sends no notifications. If [[= owner =]] wants an alert, offer a calendar or Reminders entry (that leaves the vault, so ask first).
+- A date from an event ("before the March trip", "pay the water bill Friday"): when missing it breaks something (the trip, a late fee), set `due` worked back from the event and say how in the body ("due = trip minus 8 weeks for renewal"). When the date is only when [[= owner =]] would like to do it, leave `due` off and put the date in the body.
+- Anything that isn't an action goes straight to its home ([[organization]]); a someday/maybe idea goes straight to its Area bullet ([[#Clarify: the decision tree]], step 1), with no task created.
+- Capture durable facts, not blow-by-blow exchanges: "Ortiz asked on Sep 10 how house expenses are paid", not the whole text thread.
+
+## Clarify: the decision tree
+
+For each inbox item, work top to bottom and stop at the first match.
+
+1. **Is it actionable by [[= owner =]] (or someone [[= owner =]] is chasing)?**
+   - No, and worthless → delete it (report it).
+   - No, but worth keeping → make or update a Resource ([[organization]]), or add a fact to a Person.
+   - No, but maybe later → a bullet in that Area's `## Someday/maybe` (create the heading between `## Tasks` and `## Notes` if missing; no fitting Area → [[organization]]), with `(revisit YYYY-MM-DD)` if a date matters. Delete the inbox task, if there is one.
+2. **Is it already done?** → close it (task state machine).
+3. **Does it take more than one action?**
+   - Yes → search `Projects/` and `Archive/` first; if an existing project's outcome covers it, add tasks there. Otherwise create a Project with an `area`, then its first next action with `project` set, and any other known steps as `queued` tasks with `project` set. Tasks with a `project` carry no `area`.
+   - No → a single task. Continue.
+4. **Is someone else doing it?** → `waiting-for` with `waiting_on` and `waiting_since`, plus `assignee` if that person owns doing it. An agent counts: set both to its role page ([[#Agent tasks]]).
+5. **Can and should [[= owner =]] work on it now?** → `next-action` with `contexts`. A later project step → `queued`. Another task must finish first → set `blocked_by`, make it `queued`.
+6. **Always:** a 2–5 word verb-first title ([[naming-and-style]]), `priority` if clear, `due` only for a hard deadline, every needed Resource in `resources`.
+
+## Organize: next actions per project
+
+The required next-action count per project `phase` is in the project state machine below.
+
+- Several `next-action` tasks per project are fine when they can be done in any order; keep later steps `queued` so the list stays short enough to act on.
+- A task whose `blocked_by` includes any task not `done` or `cancelled` is never `next-action`.
+- Area-only tasks (no project) may be `next-action` freely.
+- **Promote on close.** When a next action closes, promote the project's next step in the same change: among its `queued` tasks whose blockers are all closed, pick the highest `priority`, then earliest `due`, then oldest `created`. If none exists, write one from the project body, or set the project to `waiting` or `done`. Name the promoted task in the report. `python3 .scripts/vault-lint --promote` does the pick and the status change (`--dry-run` first); it leaves `contexts` and the no-candidate cases to the agent.
+
+## Task state machine
+
+| From | To | When | Field changes |
+|---|---|---|---|
+| (new) | `inbox` | Captured | `title`, `status`, best-guess `area` (the first agent that touches it adds one if missing), `created` (no `project` or `due` until clarified) |
+| `inbox` | `queued` | Clarified; a later project step, or blocked | Set `project`; add `blocked_by` if blocked |
+| `inbox` / `queued` | `next-action` | Clarified; not blocked; [[= owner =]] should work on it now | Add `contexts` |
+| `inbox` / `queued` / `next-action` | `waiting-for` | Handed off, or someone owes a reply | Add `waiting_on`, `waiting_since` (today) |
+| `waiting-for` | `next-action` or `queued` | The reply or deliverable arrived | Delete `waiting_on` and `waiting_since`; add a dated body line: "Sep 24 — Theo sent the broker's name." |
+| `next-action` | `queued` | Became blocked or can wait | Add `blocked_by` if blocked |
+| any open | `done` | [[= owner =]] says so (the status dropdown on any task list counts: [[body-sections]], Task status view), or evidence shows it | `completed: <date>`; move to `Archive/` with `archived`, `archived_from` ([[procedures]]); promote the project's next step and give it `contexts` ([[#Organize: next actions per project]]); report both |
+| any open | `cancelled` | No longer wanted | `completed: <date>`; one body line saying why; archive it |
+| `done` / `cancelled` | `inbox`, `queued`, or `next-action` | Reopened | Move back to `Tasks/`; delete `archived`, `archived_from`, `completed` |
+
+Sub-steps done in one sitting are `- [ ]` lines under `## Steps`. A step that needs its own day, person, or context is its own task with `parent` set. A "task" that needs several sittings is a project.
+
+## Project state machine
+
+A project's state is its `phase` field; tasks use `status` ([[schema]]).
+
+| Phase | Meaning | Next actions | Moves to |
+|---|---|---|---|
+| `planned` | Committed, starting later (the body says when) | 0 | `not-started`, `cancelled` |
+| `not-started` | Ready to start; nothing done yet | at least 1 | `in-progress`, `waiting`, `cancelled` |
+| `in-progress` | At least one task done | at least 1 | `waiting`, `done`, `cancelled` |
+| `waiting` | Only other people can move it | 0, and at least 1 `waiting-for` | `in-progress`, `cancelled` |
+| `done` | Outcome reached | no open tasks | archive |
+| `cancelled` | Dropped | no open tasks | archive |
+
+Closing a project: close or cancel every open task (archive them), set `phase` and `completed`, then archive the project and sort its Resources ([[procedures]], "Archive a file"). The report says what was cancelled or archived with it.
+
+## Plans for later
+
+When [[= owner =]] says "plan this for later", "save this plan", or "park this", in any session:
+
+1. **Search first** ([[strict-rules]] H7), `Archive/` included. A project that already covers the outcome gets the plan added to its body; otherwise make a new one.
+2. **Pick the form.** Several steps, committed → a Project with `phase: planned` (below). One step → a task, clarified as usual (Clarify above). Not committed ("maybe someday") → a bullet in the Area's `## Someday/maybe` linking an `analysis` Resource that holds the plan.
+3. **Write the planned Project** from [[template-project]], with `phase: planned`, an `area`, and `resources` for what the plan needs. In the body:
+   - `Done when:` the outcome, in one sentence.
+   - `Start when:` a date, an event ("before the second DNS box"), or "when [[= owner =]] says". Never a `due` unless it's a hard deadline.
+   - Under `## Notes`: `### Plan` (numbered steps, each concrete enough to become a task), then `### Decisions so far` (dated) and `### Open questions` as they apply. Name repos and files by path; link vault files.
+4. **No tasks yet.** A `planned` project has no next actions (Project state machine above); the steps stay in `### Plan`. When it starts, set `not-started` and turn the steps into tasks: first step `next-action`, the rest `queued` ([[role-vault-pm]]).
+5. **Link it** from any related Project or Area with a dated line or a `resources` entry, so it surfaces where [[= owner =]] will look.
+
+Outside the vault, an agent writes the plan as a capture note with Kind `plan` ([[outside-agent-prompt]]); the [[role-vault-intake]] files it with this recipe.
+
+## Questions for [[= owner =]]
+
+A Task that only [[= owner =]] can settle (two dates that clash, what a payment was for, a list of choices after an import) carries one Dataview field line in `## Details`, which puts it in Home's "Questions for [[= owner =]]" section:
+
+```markdown
+**Question**:: what did the $640 Zelle to FBE Studios pay for?
+```
+
+This is the one common file for everything an agent needs from [[= owner =]] ([[strict-rules]] H11): questions, decisions, approvals, proposals, conflicts, and stop-and-ask cases, never a section in a log or report.
+
+File, don't ask: search for an open question task that covers it and add to it, or create an `inbox` task with the evidence and a recommended option, linked to what it's about.
+
+Every question comes with a place to answer it:
+
+- **One question:** the question itself, with the evidence in the lines around it, then a blank `**Answer**::` line under the field line.
+- **A list of questions** (`answer-home-import-questions`): one field line summing up the list ("12 import decisions, below"), then one `- [ ]` item per question. A question that needs words (which area, what was it for) gets a blank answer line indented under its item; a yes-or-no or approve-this question gets only the checkbox, since ticking it is the answer.
+
+```markdown
+- [ ] Import Evie's RenArts handbook as family material?
+- [ ] Prodvigate $100 charge on BofA 9830: which area, or fraud?
+  - **Answer**::
+```
+
+[[= owner =]] answers in the task, whenever it suits: ticks a box, or types after `**Answer**::` (then ticks the box). The [[role-vault-pm]] applies each answer on its next run and closes the task. No agent asks these in chat; reports give only the count ([[agent-protocol]], Questions go to Home, not chat).
+
+## Agent tasks
+
+A task an agent should do next is assigned to its role, not to a Person. Agents aren't People; each role page is the agent's page.
+
+```yaml
+status: waiting-for
+assignee:
+  - "[[role-vault-ops]]"
+waiting_on: "[[role-vault-ops]]"
+waiting_since: 2026-09-28
+```
+
+- **Assigning:** [[= owner =]] sets the fields, or says "give this to the vault finance" and any agent sets them. The body says what the agent should do and what counts as done.
+- **Picking up:** every role, at Orient, lists open tasks whose `assignee` is its role page and does them in that run, or says why not ([[agent-protocol]], The operating loop). Done → closed as usual; anything [[= owner =]] must do next becomes [[= owner =]]'s own task or a question task.
+- **Seeing them:** Home's "Agents' to-dos" lists every open agent task; "Waiting for" leaves them out. An agent runs only when a session starts it, so the daily review flags any agent task waiting 2+ days (daily review step 5): that role hasn't run, and [[= owner =]] starts it.
+- **Handing off between agents:** an agent may assign a task to another role the same way, instead of doing work outside its own role.
+- **After every import**: the [[role-vault-intake]] hands the filed items to the [[role-vault-docs]] (`Tidy <Mon D> imports`); vault docs tidies them, closes that task, and gives [[= owner =]] a `Review <Mon D> imports` question task on Home.
+
+## Priority
+
+`urgent`: consequences within 7 days. `high`: matters this month. `med`: normal. `low`: whenever. Omit when unsure.
+
+## Reflect: daily review (about 5 minutes)
+
+On request or in a morning brief. Report decisions, not a status essay. Without Obsidian, `python3 .scripts/vault-lint --review --days 7` prints steps 2–5 and the due dates step 6 needs.
+
+1. `python3 .scripts/vault-lint`: note new errors.
+2. **Overdue and due soon:** open tasks with `due` on or before today + 2 days.
+3. **Today's next actions:** `next-action` tasks, grouped by `contexts`, then fitted into **today's free time**: the open blocks of 15 minutes or more between 8 AM and 8 PM PT, read live from Apple Calendar's Home and Work calendars ([[role-vault-pm]], Free time today). Short gaps take `calls` and `phone` tasks; blocks of an hour or more take `computer` work. Mac unreachable: say so and group by `contexts` only.
+4. **Inbox count:** `inbox` tasks to clarify.
+5. **Agent tasks waiting 2+ days** ([[#Agent tasks]]): name the role to run, one line each, in the briefing. **Waiting for, 7+ days** (people, not agents): each becomes a question (chase, wait, or drop) in the day's open question task, `Answer daily review decisions`, created if none is open ([[#Questions for [[= owner =]]]]).
+6. **Week ahead**: the next seven days, from the vault only. `python3 .scripts/vault-lint --review --days 7` lists everything due through today + 7; regroup what step 2 didn't already show by day, leaving out empty days, and add:
+   - on each day, timed items first (a `due` with a time: appointments, tests), then deadlines;
+   - for each Project due in the window (a trip, a show), its open tasks as "before <project>", noting any still `inbox` or `queued`;
+   - `planned` Projects whose `Start when:` line falls in the window;
+   - a crowded day (about five or more items) flagged, with one to move earlier.
+
+   Asked for alone ("week ahead", "preview"), run only this step.
+
+## Reflect: weekly review
+
+Runs alone ([[README]], Roles; how to check: [[agent-protocol#Running alongside other agents]]). Three phases; each step is a check with a fix.
+
+### Get clear
+
+1. Run `python3 .scripts/vault-lint`; fix what you can, with `--fix` and by hand.
+2. **Run logs:** read the last 7 days of `Agents/logs/`. Any "Decisions for [[= owner =]]" or "Questions for [[= owner =]]" line is a stray ([[strict-rules]] H11): capture each one that no open task or other vault file covers, and that no later log shows [[= owner =]] answered, as a question task ([[#Questions for [[= owner =]]]]) linking the log in `## Details` (why: [[agent-protocol#Run log]]).
+3. Clarify every `inbox` task.
+4. **Stray files:** anything at the vault root beyond the allowed files ([[strict-rules]] I1), anything in a subfolder that doesn't match its folder's type (a task in `Resources/reading/`), anything named `Untitled*`. File it.
+5. Close every task [[= owner =]] has confirmed done; archive closed tasks still in `Tasks/`.
+
+### Get current
+
+6. **Active projects** (`not-started`, `in-progress`) each have a next action. Missing → promote a `queued` step, write one, or change the project's `phase`. More than [[= owner =]] can act on this week → set the less important ones back to `queued`. Then rewrite each active project's `## Status` ([[body-sections]], Project status).
+7. **Waiting for:** every `waiting-for` task has `waiting_on` and `waiting_since`. Older than 7 days → a follow-up decision for [[= owner =]].
+8. **Past due:** each open task past `due` → a decision for [[= owner =]]: do it, re-date only if the real deadline moved, or cancel.
+9. **Blocked:** tasks whose blockers are all closed → promote.
+10. **Stale projects:** `in-progress` with no task changed in 14 days (`git log -1 --format=%cs -- <task>` per task) → ask whether it's still active.
+11. **Loops:** a task with empty `resources` where a Resource plainly serves it → link it. Resources nothing links to (`vault-lint --only orphans`) → link from the Area or project they serve; archive one only when it's clearly retired.
+12. **Finished projects:** `done` or `cancelled` projects still in `Projects/` → archive.
+
+### Get creative
+
+13. Read each Area's `## Someday/maybe`. Surface items whose `(revisit …)` date has passed and any that fit what's active now. [[= owner =]] decides; move the chosen ones into tasks or projects.
+14. Report what moved this week, what's overdue, stalled, or newly blocked, and what was archived.
+
+## Queries
+
+In Obsidian, [[Home]] has the views (overdue, questions, waiting for, projects with no next action); Dataview blocks for Project, Area, and Person pages are in [[body-sections]]. Without Obsidian, run these from the vault root:
+
+| Question | Command |
+|---|---|
+| Daily or weekly review, all sections | `python3 .scripts/vault-lint --review --days 7` (the week ahead; 7 is the default) |
+| What's overdue? | `--review` → "Overdue and due soon" |
+| What's next in a context? | `--review` → "Next actions by context" |
+| Which active projects have no next action? | `python3 .scripts/vault-lint --only projects` |
+| Which Resources does nothing link to? | `python3 .scripts/vault-lint --only orphans` |
+| Is a banned claim back, or a fact stale? | `python3 .scripts/vault-lint --only facts` |
+| Archive every closed task; promote each active project's next step | `python3 .scripts/vault-lint --archive-closed --promote` (`--dry-run` shows the plan) |
+
+`--review` always exits 0: it reports, it doesn't judge. Other flags: `python3 .scripts/vault-lint --help`.
+
+## Engage
+
+When [[= owner =]] asks "what now?": take `next-action` tasks whose `contexts` include where [[= owner =]] is, or `anywhere`. For tasks with no `contexts`, judge from the title (and set `contexts` when it's obvious; that's a free fix, except in the [[role-vault-pm]]'s daily mode, which only suggests it). Rank by overdue or due soon, then `priority`, then project priority. Offer three at most, each with its project. When the Mac is reachable, say how long until the next busy block and pick tasks that fit it ([[role-vault-pm]], Free time today).

@@ -1,0 +1,190 @@
+#!/usr/bin/env bash
+# Install the backup scripts outside the vault and schedule them nightly:
+# launchd on macOS, cron on Linux. Safe to rerun: unchanged files are
+# skipped and each schedule entry is replaced, never duplicated.
+#   install.sh             install
+#   install.sh --dry-run   report what would change
+#   install.sh --init      also create the restic repositories (first time only)
+# First run writes ~/.config/restic/[[= vault =]].env for you to fill in.
+set -euo pipefail
+
+src_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+vault_dir="$(cd -- "${src_dir}/../.." && pwd)"
+bin_dir="${HOME}/.local/share/[[= vault =]]-backup"
+state_dir="${HOME}/.local/state"
+cfg="${VAULT_RESTIC_CONFIG:-${HOME}/.config/restic}"
+env_file="${cfg}/[[= vault =]].env"
+password_file="${cfg}/[[= vault =]].password"
+[[% if store %]]
+scripts=(vault-restic vault-backup vault-restore store-backup)
+jobs=("backup vault-backup 3 30" "store-backup store-backup 3 45") # label-suffix script hour minute
+repos=("" --store) # vault-restic's repository flag: empty is the vault
+[[% else %]]
+scripts=(vault-restic vault-backup vault-restore)
+jobs=("backup vault-backup 3 30") # label-suffix script hour minute
+repos=("") # vault-restic's repository flag: empty is the vault
+[[% endif %]]
+
+dry_run=0
+init=0
+for arg in "$@"; do
+    case "${arg}" in
+        -n | --dry-run) dry_run=1 ;;
+        --init) init=1 ;;
+        *)
+            printf 'Usage: %s [--dry-run] [--init]\n' "${0##*/}" >&2
+            exit 2
+            ;;
+    esac
+done
+
+run() {
+    if [[ "${dry_run}" -eq 1 ]]; then
+        printf 'would run: %s\n' "$*"
+    else
+        "$@"
+    fi
+}
+
+# Settings file: written once with placeholders, never overwritten.
+if [[ ! -e "${env_file}" ]]; then
+    if [[ "${dry_run}" -eq 1 ]]; then
+        printf 'would write %s (settings to fill in)\n' "${env_file}"
+    else
+        mkdir -p "${cfg}"
+        chmod 700 "${cfg}"
+        (
+            umask 077
+            cat > "${env_file}" <<ENV
+# restic settings for the [[= vault =]] vault. Secrets: keep this file mode 600.
+# Repository URLs, for example b2:<bucket>:vault or s3:<endpoint>/<bucket>/vault
+VAULT_REPOSITORY=
+[[% if store %]]
+STORE_REPOSITORY=
+[[% endif %]]
+# Backend credentials restic reads from the environment, for example
+# B2_ACCOUNT_ID= and B2_ACCOUNT_KEY=, or AWS_ACCESS_KEY_ID= and AWS_SECRET_ACCESS_KEY=
+# What to back up, and the snapshot host name
+VAULT_BACKUP_PATH=${vault_dir}
+BACKUP_HOST=$(hostname -s)
+# Retention (optional): KEEP_DAILY=7 KEEP_WEEKLY=4 KEEP_MONTHLY=12 CHECK_SUBSET=5%
+ENV
+        )
+        printf 'wrote      %s (fill it in, then rerun)\n' "${env_file}"
+    fi
+fi
+
+# Prerequisites, without printing secret contents.
+status=0
+if [[ -r "${env_file}" ]]; then
+[[% if store %]]
+    required=(VAULT_REPOSITORY STORE_REPOSITORY VAULT_BACKUP_PATH)
+[[% else %]]
+    required=(VAULT_REPOSITORY VAULT_BACKUP_PATH)
+[[% endif %]]
+    for key in "${required[@]}"; do
+        if grep -qE "^${key}=.+" "${env_file}"; then
+            printf 'found      %s in %s\n' "${key}" "${env_file}"
+        else
+            printf 'MISSING    %s in %s\n' "${key}" "${env_file}" >&2
+            status=1
+        fi
+    done
+fi
+if [[ -s "${password_file}" ]]; then
+    printf 'found      %s\n' "${password_file}"
+else
+    printf 'MISSING    %s (the repository password, mode 600; keep a copy in your password manager)\n' "${password_file}" >&2
+    status=1
+fi
+if ! PATH="/opt/homebrew/bin:/usr/local/bin:/home/linuxbrew/.linuxbrew/bin:${PATH}" command -v restic >/dev/null 2>&1; then
+    printf 'MISSING    restic (brew install restic, or your package manager)\n' >&2
+    status=1
+fi
+[[ "${status}" -eq 0 ]] || [[ "${dry_run}" -eq 1 ]] || exit "${status}"
+
+[[ -d "${bin_dir}" ]] || run mkdir -p "${bin_dir}"
+[[ -d "${state_dir}" ]] || run mkdir -p "${state_dir}"
+for name in "${scripts[@]}"; do
+    if [[ -f "${bin_dir}/${name}" ]] && cmp -s "${src_dir}/${name}" "${bin_dir}/${name}"; then
+        printf 'unchanged  %s\n' "${bin_dir}/${name}"
+    else
+        run install -m 700 "${src_dir}/${name}" "${bin_dir}/${name}"
+        [[ "${dry_run}" -eq 1 ]] || printf 'installed  %s\n' "${bin_dir}/${name}"
+    fi
+done
+
+if [[ "${init}" -eq 1 ]]; then
+    for repo in "${repos[@]}"; do
+        # shellcheck disable=SC2086 # unquoted: empty means the vault repository
+        if "${bin_dir}/vault-restic" ${repo} cat config >/dev/null 2>&1; then
+            printf 'exists     restic repository %s(skipping init)\n' "${repo:+${repo#--} }"
+        else
+            # shellcheck disable=SC2086
+            run "${bin_dir}/vault-restic" ${repo} init
+        fi
+    done
+fi
+
+schedule_launchd() {
+    local label="$1" script="$2" hour="$3" minute="$4"
+    local plist="${HOME}/Library/LaunchAgents/${label}.plist"
+    local log="${state_dir}/[[= vault =]]-${script}.log"
+    local new_plist
+    new_plist="$(cat <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>${label}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/lockf</string><string>-t</string><string>0</string>
+        <string>/tmp/${label}.lock</string>
+        <string>${bin_dir}/${script}</string>
+    </array>
+    <key>StartCalendarInterval</key>
+    <dict><key>Hour</key><integer>${hour}</integer><key>Minute</key><integer>${minute}</integer></dict>
+    <key>StandardOutPath</key><string>${log}</string>
+    <key>StandardErrorPath</key><string>${log}</string>
+</dict>
+</plist>
+PLIST
+)"
+    if [[ -f "${plist}" ]] && [[ "$(cat "${plist}")" == "${new_plist}" ]]; then
+        printf 'unchanged  %s\n' "${plist}"
+    elif [[ "${dry_run}" -eq 1 ]]; then
+        printf 'would write %s and load it with launchctl\n' "${plist}"
+    else
+        mkdir -p "${plist%/*}"
+        launchctl bootout "gui/$(id -u)/${label}" 2>/dev/null || true
+        printf '%s\n' "${new_plist}" > "${plist}"
+        launchctl bootstrap "gui/$(id -u)" "${plist}"
+        printf 'installed  %s (nightly %02d:%02d)\n' "${plist}" "${hour}" "${minute}"
+    fi
+}
+
+schedule_cron() {
+    local label="$1" script="$2" hour="$3" minute="$4"
+    local line="${minute} ${hour} * * * /usr/bin/flock -n /tmp/${label}.lock ${bin_dir}/${script} >> ${state_dir}/[[= vault =]]-${script}.log 2>&1 # ${label}"
+    local current new
+    current="$(crontab -l 2>/dev/null || true)"
+    if grep -qxF "${line}" <<< "${current}"; then
+        printf 'unchanged  crontab entry %s\n' "${label}"
+    elif [[ "${dry_run}" -eq 1 ]]; then
+        printf 'would add crontab entry: %s\n' "${line}"
+    else
+        new="$(grep -vF "# ${label}" <<< "${current}" || true)"
+        printf '%s\n%s\n' "${new}" "${line}" | sed '/^$/d' | crontab -
+        printf 'installed  crontab entry %s (nightly %02d:%02d)\n' "${label}" "${hour}" "${minute}"
+    fi
+}
+
+for job in "${jobs[@]}"; do
+    read -r suffix script hour minute <<< "${job}"
+    if [[ "$(uname -s)" == Darwin ]]; then
+        schedule_launchd "com.[[= vault =]].${suffix}" "${script}" "${hour}" "${minute}"
+    else
+        schedule_cron "com.[[= vault =]].${suffix}" "${script}" "${hour}" "${minute}"
+    fi
+done

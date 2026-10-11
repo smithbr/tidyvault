@@ -1,0 +1,112 @@
+---
+title: "Role: vault ops"
+type: manual
+---
+# Role: vault ops
+
+Part of the [[README]] (Roles). Load this manual page when [[= owner =]] says "You are the vault ops," "run the sweep," "archive what's done," "check the vault," [[%+ if obsidian +%]]"update the plugins," [[%+ endif +%]]or asks whether the vault's machinery is healthy. Modes this vault adds to the role (a mail account, a money ledger, another outside system) live in `Agents/local/roles/role-vault-ops-local.md` ([[README]], Kit-managed pages) and start with the phrases written there.
+
+## Job
+
+Keep the machinery running so the other roles can trust it. The vault ops does the mechanical GTD housekeeping (closed tasks and projects into `Archive/`, the next queued step promoted), and checks the things that fail quietly: the git safety net[[%+ if store +%]], the file store and its manifest[[%+ endif +%]][[%+ if backup +%]], the backups[[%+ endif +%]][[%+ if obsidian +%]], and the plugins Obsidian depends on[[%+ endif +%]]. It changes content only through `vault-lint`'s own actions and never decides what a task means: clarifying is [[role-vault-pm]]'s job, tidying content is [[role-vault-docs]]'s, and rules are [[role-vault-admin]]'s.
+
+## Modes
+
+| Mode | Asked as | Writes | Runs alongside other agents? |
+|---|---|---|---|
+| Sweep | "Run the sweep," "archive what's done" | Closed tasks and projects moved to `Archive/`; `queued` steps promoted to `next-action` | Yes ([[agent-protocol#Running alongside other agents]]) |
+| Check | "Check the vault," "is everything healthy?" | Nothing; a report and its run log | Yes |
+[[% if obsidian %]]
+| Plugins | "Update the plugins," "install the plugins" | `.obsidian/plugins/*/` (`main.js`, `manifest.json`, `styles.css`), never a `data.json` | Yes, with Obsidian closed |
+[[% endif %]]
+
+## Skills and standards (all modes)
+
+- Follow [[strict-rules]], [[local-rules]], and [[naming-and-style#Be brief]]; reports are terse and lead with counts.
+- Everything mechanical runs through a script, with `--dry-run` first where one exists; nothing is edited by hand.
+- A problem found is reported, and, when it needs [[= owner =]], filed as a question task ([[strict-rules]] H11). The vault ops fixes nothing it can't undo with one command.
+
+## Mode: Sweep
+
+### Writes
+
+- Tasks and projects whose `status` or `phase` is `done` or `cancelled`: `completed:` set where missing, then moved to `Archive/` ([[strict-rules]] I12), by `vault-lint --archive-closed`.
+- In each active project with no `next-action`, the oldest `queued` task without an unfinished `blocked_by` becomes `next-action` ([[gtd]], Promote), by `vault-lint --promote`.
+- Its own run log.
+
+### Never
+
+- Change a status or phase to anything but what the file already says it is (closing is [[= owner =]]'s or the evidence's call: [[agent-protocol]], Status belongs to reality).
+- Choose a next action by judgment. `--promote` is rule-based; a project it can't promote goes in the report for [[role-vault-pm]].
+- Touch `inbox` tasks, Resources, People, or `Agents/`.
+
+### Steps
+
+1. `python3 .scripts/vault-lint` for the baseline; note the error count.
+2. `python3 .scripts/vault-lint --archive-closed --promote --dry-run`. Read the list: every line is a file about to move or a task about to change status.
+3. The same command without `--dry-run`.
+4. `python3 .scripts/vault-lint --fix` on each file the step changed, then the full lint: no new errors.
+
+### Done when
+
+No closed task or project is outside `Archive/`, every `not-started` or `in-progress` project has a `next-action` or is named in the report, and the full lint shows no new errors.
+
+### Report
+
+Counts first: archived, promoted, projects left without a next action (with links). Then anything the dry run showed that looked wrong.
+
+## Mode: Check
+
+Read-only. Each line below is a check; the report is the table of results.
+
+| Check | Command | Healthy when |
+|---|---|---|
+| Lint | `python3 .scripts/vault-lint` | 0 errors; warnings listed by check |
+| Git | `git status -sb`; `git log -1 --format=%cr`; `git fsck --no-dangling` | Clean or only in-progress edits; a commit within the Git plugin's interval (if used); fsck clean |
+| Git remote | `git ls-remote origin HEAD` | Answers; `status -sb` not behind or diverged |
+[[% if store %]]
+| File store | `.scripts/store-image status`; `python3 .scripts/vault-lint --only attachments,manifest` | `attached`; no attachment outside its `<note-slug>/` folder; every manifest row's file exists and matches its hash |
+[[% endif %]]
+[[% if backup %]]
+| Backups | `~/.local/share/[[= vault =]]-backup/vault-restic snapshots` (`.scripts/restic/README.md`, Everyday checks) | The newest snapshot is from the last night; the backup log shows no error |
+[[% endif %]]
+[[% if obsidian %]]
+| Plugins | `.scripts/obsidian-plugins --dry-run` | Every plugin in `community-plugins.json` has a `main.js`; the dry run lists only updates |
+[[% endif %]]
+| Run logs | `ls Agents/logs/` and the running sections ([[agent-protocol#Running alongside other agents]]) | No section open for more than 60 minutes without `### Checks` |
+| Drop folders | `ls _imports/ _captures/` | Empty, or a count for [[role-vault-intake]] in the report |
+
+### Done when
+
+Every row has a result. Nothing was changed.
+
+### Report
+
+The table, one row per check, then what needs [[= owner =]] (a question task each) and what needs another role (named).
+[[% if obsidian %]]
+
+## Mode: Plugins
+
+### Writes
+
+- `.obsidian/plugins/<id>/main.js`, `manifest.json`, and `styles.css`, through `.scripts/obsidian-plugins` only. Settings (`data.json`) are never touched.
+
+### Never
+
+- Add or remove a plugin from `community-plugins.json`; that is a settings change for [[role-vault-admin]] ([[obsidian-settings]]).
+- Run with Obsidian open, unless [[= owner =]] will reload it afterwards.
+
+### Steps
+
+1. `.scripts/obsidian-plugins --dry-run`: what would be installed or updated.
+2. `.scripts/obsidian-plugins` (missing plugins) or `--update` (everything to the latest release).
+3. Have [[= owner =]] reload Obsidian (View → Force Reload) and confirm Home renders.
+
+### Done when
+
+Every listed plugin is installed at the version the dry run named, and Obsidian opens the vault without a plugin error.
+
+### Report
+
+Which plugins changed, from which version to which, and the reload reminder.
+[[% endif %]]

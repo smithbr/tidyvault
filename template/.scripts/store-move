@@ -1,0 +1,251 @@
+#!/usr/bin/env python3
+"""Move filed attachments from _attachments/<note-slug>/ into the file store.
+
+The file store is a folder outside the vault (store_path in .tidyvault.yml),
+reached through the _files symlink (Resources/file-store.md). Everything filed in
+_attachments/<note-slug>/ moves except notes (small images too); _raw/ never
+moves. For each file, in this order, so a stopped run can simply be rerun:
+
+  1. copy it to <store>/<note-slug>/<name> and check the copy's sha256 against
+     its manifest row, or against the original for a file made in the vault (a mismatch stops the run);
+  2. rewrite wikilinks and embeds to it as _files/<note-slug>/<name>, and plain
+     _attachments/<note-slug>/<name> paths, in Home.md and the content folders.
+     Never in Agents/: run logs are history (their bare-name links still
+     resolve where the store is attached), and the manual's examples are edited by hand;
+  3. point its manifest rows' filed_path at _files/<note-slug>/<name>;
+  4. only then remove the vault copy.
+
+Ends with `vault-lint --only manifest,links,attachments` and exits nonzero if
+it finds an error.
+
+  store-move --dry-run            list what would move, and any problems
+  store-move                      move everything that qualifies
+  store-move --only SLUG [SLUG…]  move only these note folders
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import importlib.machinery
+import importlib.util
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent
+
+
+def _load_lint():
+    sys.dont_write_bytecode = True  # no __pycache__ inside the vault
+    loader = importlib.machinery.SourceFileLoader("vault_lint", str(HERE / "vault-lint"))
+    spec = importlib.util.spec_from_loader("vault_lint", loader)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["vault_lint"] = mod  # dataclasses look the module up while it loads
+    loader.exec_module(mod)
+    return mod
+
+
+VL = _load_lint()
+ATTACH, RAW, STORE = VL.ATTACH_DIR, VL.RAW_DIR, VL.STORE_DIR
+MANIFEST = ROOT / VL.MANIFEST
+NOTE_DIRS = [d for d in VL.CONTENT_DIRS if d != "Agents"]  # the manual and run logs are never rewritten
+WIKILINK = re.compile(r"(!?\[\[)([^\]\n]+?)(\]\])")
+
+
+def sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def human(n: float) -> str:
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024
+    return str(n)
+
+
+def read_manifest() -> tuple[str, list[list[str]]]:
+    lines = MANIFEST.read_text(encoding="utf-8").split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    if not lines or lines[0].split("\t") != VL.MANIFEST_COLUMNS:
+        sys.exit(f"store-move: {VL.MANIFEST} header is not {' '.join(VL.MANIFEST_COLUMNS)}")
+    return lines[0], [ln.split("\t") for ln in lines[1:]]
+
+
+def write_manifest(header: str, rows: list[list[str]]) -> None:
+    fd, tmp = tempfile.mkstemp(dir=MANIFEST.parent, prefix=".manifest-", suffix=".tsv")
+    with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(header + "\n" + "".join("\t".join(r) + "\n" for r in rows))
+    os.replace(tmp, MANIFEST)
+
+
+def candidates(only: set[str]) -> list[Path]:
+    out = []
+    base = ROOT / ATTACH
+    for folder in sorted(p for p in base.iterdir() if p.is_dir() and not p.name.startswith(("_", "."))):
+        if only and folder.name not in only:
+            continue
+        for f in sorted(folder.iterdir()):
+            if f.is_file() and not f.name.startswith(".") and f.name not in VL.IGNORED_NAMES:
+                if VL.belongs_in_store(f"{ATTACH}/{folder.name}/{f.name}", f.stat().st_size):
+                    out.append(f)
+    return out
+
+
+def note_files() -> list[Path]:
+    notes = [ROOT / "Home.md"]
+    for d in NOTE_DIRS:
+        notes.extend(sorted((ROOT / d).rglob("*.md")))
+    return [n for n in notes if n.is_file()]
+
+
+def rewrite_text(text: str, name: str, old_rel: str, new_rel: str, bare_ok: bool) -> str:
+    """Point wikilinks and plain paths at the moved file."""
+    low_name, low_old = name.lower(), old_rel.lower()
+
+    def fix(m: re.Match) -> str:
+        inner = m.group(2)
+        target, sep, rest = _split(inner)
+        t = target.strip().lstrip("/").lower()
+        if t == low_old or (bare_ok and t == low_name) or (t.endswith("/" + low_name) and low_old.endswith(t)):
+            return m.group(1) + new_rel + sep + rest + m.group(3)
+        return m.group(0)
+
+    text = WIKILINK.sub(fix, text)
+    return text.replace(old_rel, new_rel)
+
+
+def _split(inner: str) -> tuple[str, str, str]:
+    m = re.search(r"\\?\||#", inner)
+    if not m:
+        return inner, "", ""
+    return inner[: m.start()], m.group(0), inner[m.end():]
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    ap.add_argument("--dry-run", action="store_true", help="list what would move; change nothing")
+    ap.add_argument("--only", nargs="+", default=[], metavar="SLUG", help="only these note folders")
+    args = ap.parse_args()
+
+    link = ROOT / STORE
+    cfg = VL.load_config(ROOT)
+    if "store" not in cfg["modules"]:
+        sys.exit("store-move: module store is off in .tidyvault.yml")
+    state = VL.store_state(ROOT, cfg["store_image"])
+    if state == "absent":
+        sys.exit(f"store-move: {STORE} is not a symlink to the file store here")
+    if state == "locked":
+        sys.exit("store-move: the file store is locked; run .scripts/store-image unlock first")
+    store = link.resolve()
+
+    header, rows = read_manifest()
+    by_filed: dict[str, list[int]] = {}
+    for i, r in enumerate(rows):
+        by_filed.setdefault(r[2], []).append(i)
+
+    all_names: dict[str, int] = {}
+    for d in (ROOT / ATTACH, store):
+        for f in d.rglob("*"):
+            if f.is_file():
+                all_names[f.name.lower()] = all_names.get(f.name.lower(), 0) + 1
+
+    files = candidates(set(args.only))
+    plan, problems, unlisted = [], [], []
+    for f in files:
+        slug, name = f.parent.name, f.name
+        old_rel, new_rel = f"{ATTACH}/{slug}/{name}", f"{STORE}/{slug}/{name}"
+        idx = by_filed.get(old_rel) or by_filed.get(new_rel) or []
+        if idx:
+            want = rows[idx[0]][0]
+            if sha256(f) != want:
+                problems.append(f"changed since import (checksum differs from its manifest row): {old_rel}")
+                continue
+        else:
+            want = sha256(f)  # made in the vault (no import, so no manifest row): check the copy against itself
+            unlisted.append(old_rel)
+        dest = store / slug / name
+        if dest.exists() and sha256(dest) != want:
+            problems.append(f"a different file is already in the store: {new_rel}")
+            continue
+        plan.append((f, slug, name, old_rel, new_rel, idx, want, dest))
+
+    total = sum(p[0].stat().st_size for p in plan)
+    folders = sorted({p[1] for p in plan})
+    print(f"{'Would move' if args.dry_run else 'Moving'} {len(plan)} file(s), {human(total)}, "
+          f"from {len(folders)} note folder(s) into {store}")
+    for p in problems:
+        print(f"  problem: {p}")
+    if unlisted:
+        print(f"  {len(unlisted)} file(s) have no manifest row (made in the vault, not imported); "
+              "they move too, checked against their own checksum:")
+        for u in unlisted:
+            print(f"    {u}")
+    if args.dry_run:
+        for f, slug, name, old_rel, new_rel, *_ in plan:
+            print(f"  {human(f.stat().st_size):>9}  {old_rel}")
+        kept = [p for p in (ROOT / ATTACH).glob("*/*") if p.is_file() and not p.parent.name.startswith("_")
+                and p not in files]
+        print(f"Staying in {ATTACH}/: {len(kept)} note(s), "
+              f"{human(sum(p.stat().st_size for p in kept))}")
+        return 1 if problems else 0
+    if problems:
+        print("store-move: fix the problems above first; nothing moved", file=sys.stderr)
+        return 1
+
+    notes = note_files()
+    texts = {n: n.read_text(encoding="utf-8") for n in notes}
+    moved = 0
+    for f, slug, name, old_rel, new_rel, idx, want, dest in plan:
+        # 1. copy and verify
+        if not dest.exists():
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            tmp = dest.with_name(f".{name}.part")
+            shutil.copy2(f, tmp)
+            os.replace(tmp, dest)
+        if sha256(dest) != want:
+            print(f"store-move: checksum mismatch after copy: {new_rel}; stopping", file=sys.stderr)
+            return 1
+        # 2. links
+        bare_ok = all_names.get(name.lower(), 0) <= 2  # this file, plus its store copy
+        for n in notes:
+            t = texts[n]
+            if name.lower() not in t.lower():
+                continue
+            new = rewrite_text(t, name, old_rel, new_rel, bare_ok=bare_ok)
+            if new != t:
+                n.write_text(new, encoding="utf-8")
+                texts[n] = new
+        # 3. manifest: re-read first, so rows another agent appended meanwhile survive
+        header, rows = read_manifest()
+        for r in rows:
+            if r[2] == old_rel:
+                r[2] = new_rel
+        write_manifest(header, rows)
+        # 4. remove the vault copy
+        f.unlink()
+        if not any(f.parent.iterdir()):
+            f.parent.rmdir()
+        moved += 1
+        if moved % 100 == 0:
+            print(f"  {moved}/{len(plan)}")
+    print(f"Moved {moved} file(s), {human(total)}.")
+
+    res = subprocess.run([sys.executable, str(HERE / "vault-lint"), "--only", "manifest,links,attachments"],
+                         cwd=ROOT, capture_output=True, text=True)
+    print(res.stdout.strip().split("\n")[-1] if res.stdout.strip() else res.stderr.strip())
+    return res.returncode
+
+
+if __name__ == "__main__":
+    sys.exit(main())

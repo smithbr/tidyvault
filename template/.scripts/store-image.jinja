@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# Lock and unlock the file store: an encrypted disk image mounted at
+# [[= store_path =]], which the vault reaches through _files (Mac only).
+#   store-image status   print attached, locked, or absent; exit 0 only when attached
+#   store-image unlock   mount the image (asks for its password, kept in
+#                        the password manager as "[[= vault =]]-files disk image")
+#   store-image lock     unmount it (--force if a file is still open)
+# Agents check `store-image status` before writing to _files/; locked means
+# file into _attachments/<note-slug>/, as where the store isn't attached.
+set -euo pipefail
+
+store="${VAULT_FILES:-[[= store_path =]]}"
+store="${store/#\~/${HOME}}"
+image="${VAULT_FILES_IMAGE:-${store}.sparsebundle}"
+name="${0##*/}"
+
+mounted() {
+    [[ -d "${store}" ]] && [[ "$(stat -f %d "${store}")" != "$(stat -f %d "${store}/..")" ]]
+}
+
+state() {
+    if mounted; then
+        echo attached
+    elif [[ -e "${image}" ]]; then
+        echo locked
+    elif [[ -d "${store}" ]]; then
+        echo attached # no image: a plain folder is the store, as before
+    else
+        echo absent
+    fi
+}
+
+case "${1:-status}" in
+    status)
+        s="$(state)"
+        echo "${s}"
+        [[ "${s}" == attached ]]
+        ;;
+    unlock)
+        if mounted; then
+            echo "already unlocked: ${store}"
+            exit 0
+        fi
+        [[ -e "${image}" ]] || { echo "${name}: no disk image at ${image}" >&2; exit 1; }
+        mkdir -p "${store}"
+        # Files in the bare mount point would sit outside the image and be hidden once it mounts.
+        if [[ -n "$(find "${store}" -mindepth 1 -not -name .DS_Store -print -quit)" ]]; then
+            echo "${name}: ${store} holds files outside the image; move them out first:" >&2
+            find "${store}" -mindepth 1 -not -name .DS_Store | head -20 >&2
+            exit 1
+        fi
+        hdiutil attach "${image}" -mountpoint "${store}" -nobrowse -quiet
+        echo "unlocked: ${store}"
+        ;;
+    lock)
+        if ! mounted; then
+            echo "already locked"
+            exit 0
+        fi
+        if pgrep -qf "restic backup ${store}"; then
+            echo "${name}: a store backup is running; lock after it finishes" >&2
+            exit 1
+        fi
+        if [[ "${2:-}" == --force ]]; then
+            hdiutil detach "${store}" -force -quiet
+        else
+            hdiutil detach "${store}" -quiet || {
+                echo "${name}: a file in the store is still open; close it or run: ${name} lock --force" >&2
+                exit 1
+            }
+        fi
+        echo "locked"
+        ;;
+    -h | --help)
+        sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'
+        ;;
+    *)
+        echo "Usage: ${name} [status|unlock|lock [--force]]" >&2
+        exit 2
+        ;;
+esac

@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# Check the password-manager (1Password) copy of the PII register against the vault, printing
+# keys and checksums only, never a value (Mac, needs `op` signed in).
+#   pii-register-check          every key in Resources/pii-register.md is in the
+#                               1Password document, and the reverse
+#   pii-register-check FILE     also: FILE is byte-identical to the 1Password
+#                               document (e.g. a draft, before it's deleted)
+# The document is fetched into a private temp file that is removed on exit.
+# Exit 0 = everything matches, 1 = a mismatch, 2 = bad usage or no access.
+set -euo pipefail
+
+item="${PII_REGISTER_ITEM:-[[= vault =]] PII register}"
+root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+# Installed outside the vault (e.g. ~/.local/bin): the vault is elsewhere.
+[[ -f "${root}/Resources/pii-register.md" ]] || root="${VAULT_ROOT:?set VAULT_ROOT to the vault path}"
+stub="${root}/Resources/pii-register.md"
+name="${0##*/}"
+key_re='[a-z0-9-]+\.(id|account|credential|contact|dob|health|legal|intimate)\.[a-z0-9-]+'
+
+[[ $# -le 1 ]] || { echo "Usage: ${name} [FILE]" >&2; exit 2; }
+[[ "${1:-}" != -h && "${1:-}" != --help ]] || { sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; exit 0; }
+command -v op >/dev/null || { echo "${name}: 1Password CLI (op) not found" >&2; exit 2; }
+[[ -f "${stub}" ]] || { echo "${name}: no stub at ${stub}" >&2; exit 2; }
+
+tmp="$(umask 077 && mktemp -d)"
+trap 'rm -rf "${tmp}"' EXIT
+if ! op document get "${item}" --out-file "${tmp}/register.md" >/dev/null; then
+    echo "${name}: couldn't fetch \"${item}\" from 1Password (signed in?)" >&2
+    exit 2
+fi
+
+status=0
+if [[ $# -eq 1 ]]; then
+    [[ -f "$1" ]] || { echo "${name}: no file at $1" >&2; exit 2; }
+    a="$(shasum -a 256 "${tmp}/register.md" | cut -d' ' -f1)"
+    b="$(shasum -a 256 "$1" | cut -d' ' -f1)"
+    if [[ "${a}" == "${b}" ]]; then
+        echo "identical: 1Password and $1 (sha256 ${a:0:12}…)"
+    else
+        echo "DIFFERENT: 1Password ${a:0:12}… vs $1 ${b:0:12}…"
+        status=1
+    fi
+fi
+
+# Stub keys are its list items: - `person.category.label` — …
+# shellcheck disable=SC2016 # the backticks are literal Markdown
+grep -oE "^- \`${key_re}\`" "${stub}" | sed -E 's/^- `//; s/`$//' | sort -u >"${tmp}/stub-keys"
+grep -oE "\b${key_re}\b" "${tmp}/register.md" | sort -u >"${tmp}/doc-keys"
+comm -23 "${tmp}/stub-keys" "${tmp}/doc-keys" >"${tmp}/missing"
+comm -13 "${tmp}/stub-keys" "${tmp}/doc-keys" >"${tmp}/extra"
+echo "keys: $(wc -l <"${tmp}/stub-keys" | tr -d ' ') in the stub, $(wc -l <"${tmp}/doc-keys" | tr -d ' ') in 1Password"
+if [[ -s "${tmp}/missing" ]]; then
+    echo "in the stub but not in 1Password (add their rows):"
+    sed 's/^/  /' "${tmp}/missing"
+    status=1
+fi
+if [[ -s "${tmp}/extra" ]]; then
+    echo "in 1Password but not in the stub (add them to the stub, or they're retired):"
+    sed 's/^/  /' "${tmp}/extra"
+    status=1
+fi
+[[ "${status}" -eq 0 ]] && echo "ok: every key matches"
+exit "${status}"

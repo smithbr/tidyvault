@@ -1,0 +1,16 @@
+# tidyvault config for the good fixture vault
+modules:
+  - store
+  - pii
+  - false-facts
+  - obsidian
+owner: Robin
+owner_full: "Robin Vale"
+owner_slug: robin-vale
+vault: good
+lint:
+  proper_nouns: []
+  proper_phrases: []
+  disabled_checks: []
+  read_only_url_patterns:
+    - old-wiki\.example

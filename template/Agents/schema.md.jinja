@@ -1,0 +1,138 @@
+---
+title: Schema
+type: manual
+---
+# Schema
+
+Part of the [[README]]. The exact frontmatter contract for every Task, Project, Area, Resource, Person, manual page, and template. `.scripts/vault-lint` enforces this file; if the two disagree, fix whichever is wrong in the same change.
+
+## YAML format
+
+A restricted YAML subset, so any tool or plain text editor can read and write it safely.
+
+- Opens on line 1 with `---`, closes with `---`. Nothing before it.
+- One `key: value` per line. Keys are `snake_case`.
+- Scalars are unquoted unless they contain `:` followed by a space or ` #`, start with a special character (`[`, `{`, `"`, `'`, `#`, `&`, `*`, `!`, `|`, `>`, `%`, `@`, `` ` ``), or look like a boolean. Quote with double quotes.
+- **Wikilinks are always double-quoted:** `project: "[[settle-the-estate]]"`.
+- Lists are block style, two-space indent: `  - "[[health]]"`. No inline `[a, b]` lists.
+- Dates are unquoted ISO: `2026-10-02`. A time, when one genuinely matters, is local: `2026-10-02T15:30`.
+- Booleans are `true` / `false`, lowercase.
+- **No empty keys.** A field with no value is deleted, not left blank.
+- Key order: `title` first, then the folder's fields in the order of its table, then the common fields `aliases`, `tags`, `sensitive`, `public_places`, `created` last. In `Archive/`, `archived` and `archived_from` come just before the common fields. Wrong order is a lint warning, fixed by `--fix`.
+
+## Fields every type may carry
+
+| Field | Type | Rule |
+|---|---|---|
+| `title` | text | **Required.** Sentence case. Matches the `# H1` exactly. The filename is its kebab-case form. |
+| `aliases` | list | Other names it is known by ("Mom" for `theo-vale`). Obsidian uses them for link suggestions. Never a second spelling of the title. |
+| `tags` | list | Kebab-case topic tags, no `#`. Topics only — never status, type, or GTD context. |
+[[% if pii %]]
+| `public_places` | `true` | The street addresses and phone numbers in this file are businesses or public places (saved places, receipts, ticket locations), so `vault-lint`'s `pii` check skips them; emails, IDs, and accounts are still checked ([[sensitive-data]]). Only present when true. Never on a Person. |
+| `sensitive` | `true` | The file has PII keys (links to [[pii-register]] in place of values) or a private topic; either way anything that serves the vault to remote agents never serves it ([[sensitive-data]]). Only present when true. |
+[[% endif %]]
+| `created` | date | Date the file was first made. Set once, never changed. |
+
+## Tasks/
+
+| Field | Type | Rule |
+|---|---|---|
+| `title` | text | Required. Verb-first, 2–5 words. |
+| `status` | `inbox` \| `queued` \| `next-action` \| `waiting-for` \| `done` \| `cancelled` | **Required.** `inbox` = not yet clarified; `queued` = clarified but not active yet (needs `project` or `blocked_by`). See [[gtd]]. |
+| `priority` | `low` \| `med` \| `high` \| `urgent` | Optional. |
+| `due` | date | Only for a real deadline — something breaks or costs money if missed. Never a wish date. |
+| `project` | link | The one project this task serves. Single value, not a list. |
+| `area` | list of links | Only when there is no `project`; delete it when a `project` is set. Every open task has a `project` or an `area`. |
+| `parent` | link | The task this is a sub-step of. |
+| `contexts` | list | Where or with what it can be done: `calls` \| `computer` \| `errands` \| `home` \| `phone` \| `agenda` \| `anywhere`. |
+| `assignee` | list of links | People (not [[= owner =]]) who own doing it, or an agent's role page (`[[role-vault-ops]]`) when an agent owns it ([[gtd]], Agent tasks). Omit when [[= owner =]] owns it. |
+| `waiting_on` | link | Required when `status: waiting-for` — the person (`People/`), company (`Resources/` with `type: organization`), or agent (its role page in `Agents/roles/`) being waited on; create the Person or Resource if missing, even for a one-off name ([[organization]]). |
+| `waiting_since` | date | Required when `status: waiting-for` — when it was handed off. |
+| `people` | list of links | Other people involved. |
+| `resources` | list of links | Every Resource, Person, or other file needed to do the task. |
+| `blocked_by` | list of links | Tasks that must finish first. A blocked task is never `next-action`. |
+| `completed` | date | Set when `status` becomes `done` or `cancelled`. |
+
+## Projects/
+
+| Field | Type | Rule |
+|---|---|---|
+| `title` | text | Required. Names the outcome. |
+| `phase` | `planned` \| `not-started` \| `in-progress` \| `waiting` \| `done` \| `cancelled` | **Required.** Not `status`, so Obsidian suggests task and project values apart; `vault-lint --fix` renames an old `status`. See [[gtd]]. |
+| `health` | `on-track` \| `at-risk` \| `blocked` | Set by the agent that sweeps the project; needs `last_sweep` ([[body-sections]], Project status). |
+| `last_sweep` | date | The day of the last sweep that rewrote `## Status`. |
+| `priority` | `low` \| `med` \| `high` \| `urgent` | Optional. |
+| `due` | date | Hard deadline only. |
+| `area` | list of links | **Required.** At least one Area. |
+| `people` | list of links | Optional. |
+| `resources` | list of links | Optional — the project's key Resources. |
+| `completed` | date | Set when `phase` becomes `done` or `cancelled`. |
+
+No `tasks:` field. Tasks point at their project; the project lists them with a Dataview query.
+
+## Areas/
+
+| Field | Type | Rule |
+|---|---|---|
+| `title` | text | Required. |
+| `people` | list of links | Curated key people only. |
+| `resources` | list of links | Curated key resources only. |
+
+No `projects:` field — projects point at their area; the area lists them with Dataview.
+
+## Resources/
+
+| Field | Type | Rule |
+|---|---|---|
+| `title` | text | Required. |
+| `type` | `reference` \| `list` \| `document` \| `analysis` \| `log` \| `organization` | **Required.** See the definitions below. |
+| `area` | list of links | Optional, usually one. |
+| `projects` | list of links | Projects this serves. |
+| `people` | list of links | Who else it's about or for. [[= owner =]] is implied; never list `[[[[= owner_slug =]]]]`. |
+| `date` | date | For `document` and `log`: the date on the real-world document or of the event. |
+| `url` | URL | The source, for a clipped or bookmarked `reference`. Must start with `http`. |
+| `favorite` | `true` | Only present when true. |
+
+Resource types:
+
+- `reference` — durable facts or how-to you look things up in (runbooks, guides, account admin); a bookmark is a `reference` with a `url` and a sentence on why it's saved.
+- `list` — a curated list that grows (shopping, wish list, gift ideas, watchlists).
+- `document` — a summary of a real-world document, usually with a PDF in the file store (`_files/`).
+- `analysis` — a one-time piece of thinking: research, comparisons, plans, decisions.
+- `log` — [[= owner =]]'s dated records of what happened (visit notes). Never an agent's run record; that goes in `Agents/logs/`.
+- `organization` — a company or institution [[= owner =]] deals with: contact details, account admin, history. Not a person.
+
+## People/
+
+| Field | Type | Rule |
+|---|---|---|
+| `title` | text | Required. The name [[= owner =]] uses for them. |
+| `relationship` | `self` \| `family` \| `partner` \| `friend` \| `professional` \| `other` | **Required.** `self` = [[= owner =]] only. `partner` = Priya. `professional` = anyone [[= owner =]] pays or deals with through work or a service (attorney, doctor, cat sitter). A company is never a Person: it is a Resource with `type: organization` ([[organization]]). `other` when none fits. |
+| `context` | text | A few words ("Estate attorney"). Details go in the body. |
+| `location` | text | City, state. |
+| `area` | list of links | Optional. |
+| `projects` | list of links | Optional. |
+| `resources` | list of links | Optional. |
+
+## Archive/
+
+Keeps the file's original fields from its old folder (only that folder's fields), plus:
+
+| Field | Type | Rule |
+|---|---|---|
+| `archived` | `true` | **Required.** |
+| `archived_from` | text | **Required.** The top-level folder it came from, not a subfolder: `Tasks` \| `Projects` \| `Areas` \| `Resources` \| `People`. |
+
+## Agents/
+
+`title`, `type: manual`, role pages (`Agents/roles/role-*.md`) included. Templates (`Agents/templates/template-*.md`) use `type: template`; their body is Templater source and is exempt from body checks.
+
+Run logs (`Agents/logs/log-*.md`) use `title`, `type: log`, `date` (**required**, the day of the run), and `sensitive` when true, in that order. Rules in [[agent-protocol]] (Run log).
+
+## Root files
+
+`Home.md` carries only `title`. `AGENTS.md` and `llms.txt` carry no frontmatter and are outside this contract.
+
+## Retired fields
+
+Retired fields are never written again: `agent_review` ([[strict-rules]] H4), `archive`, `edited`, `description`, `tasks`, `blocking`, `sub-item`, `parent_item`, `categories`, plus this vault's own in `lint.retired_fields` of `.tidyvault.yml` (fields an import from another system left behind). Any sighting is a lint error; `vault-lint --fix` deletes the redundant ones.

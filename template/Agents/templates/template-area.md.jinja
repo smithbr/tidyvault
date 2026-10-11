@@ -1,0 +1,47 @@
+---
+title: Area template
+type: template
+---
+# Area template
+
+Part of the [[README]]. Skeleton for a new Area in `Areas/`. Creating an Area is reported prominently ([[agent-protocol]]). Rules: [[organization]], [[schema]], [[body-sections]].
+
+**Using it:** [[= owner =]] creates a new file in `Areas/`, and Templater fills it. Agents copy it by hand and save it as `Areas/<slug>.md`. Both, in detail: [[template-task]]. Then:
+
+- Replace the first body line with the standard being maintained.
+- Add `people:` and `resources:` only for a curated few key People and Resources. Never a `projects:` field; the Projects block lists them.
+- Delete the Someday/maybe and Notes headings if empty.
+
+<%*
+tR = "";
+let title = tp.file.title;
+if (title.startsWith("Untitled")) title = await tp.system.prompt("Area title (sentence case)");
+const slug = title.normalize("NFKD").replace(/[^\x00-\x7F]/g, "").toLowerCase().replace(/'/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+await tp.file.move("Areas/" + slug);
+-%>
+---
+title: <% title %>
+created: <% tp.date.now("YYYY-MM-DD") %>
+---
+# <% title %>
+
+Standard: (what "kept up" looks like, in one sentence).
+
+## Projects
+
+```dataview
+TABLE phase, due, priority
+FROM "Projects"
+WHERE contains(area, this.file.link)
+SORT phase ASC
+```
+
+## Tasks
+
+```dataviewjs
+await dv.view("Agents/views/task-status")
+```
+
+## Someday/maybe
+
+## Notes

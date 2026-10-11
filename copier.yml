@@ -1,0 +1,93 @@
+# tidyvault: Copier template for an Obsidian PARA/GTD vault run by agents.
+# New vault:  copier copy gh:smithbr/tidyvault <path>
+# Update:     copier update   (from the vault root)
+_min_copier_version: "9.4"
+_subdirectory: template
+_answers_file: .copier-answers.yml
+_templates_suffix: .jinja
+_envops:
+  # Wikilinks use [[...]] and Obsidian templates use {{...}}: kit markers must clash with neither.
+  block_start_string: "[[%"
+  block_end_string: "%]]"
+  variable_start_string: "[[="
+  variable_end_string: "=]]"
+  comment_start_string: "[[!"
+  comment_end_string: "!]]"
+  trim_blocks: true
+  lstrip_blocks: true
+  keep_trailing_newline: true
+
+# Seeds: written once, then the vault's own. Agents/local/ is never touched by the kit.
+_skip_if_exists:
+  - Home.md
+  - "People/*.md"
+  - Agents/changelog.md
+  - Agents/pii-allowlist.md
+  - "Agents/local/**"
+  - "Resources/**"
+  - "Areas/**"
+  # Obsidian settings: shipped once; Obsidian and the owner change them from then on.
+  - ".obsidian/**"
+
+# Module files are left out when their module is off.
+_exclude:
+  - copier.yml
+  - "[[% if not backup %]].scripts/restic[[% endif %]]"
+  - "[[% if not backup %]].scripts/restic/**[[% endif %]]"
+  - "[[% if not (backup and store) %]].scripts/restic/store-*[[% endif %]]"
+  - "[[% if not backup %]]Resources/vault-backup-and-restore.md*[[% endif %]]"
+  - "[[% if not false_facts %]]Resources/false-facts.md*[[% endif %]]"
+  - "[[% if not obsidian %]].obsidian[[% endif %]]"
+  - "[[% if not obsidian %]].obsidian/**[[% endif %]]"
+  - "[[% if not obsidian %]].scripts/obsidian-plugins[[% endif %]]"
+  - "[[% if not obsidian %]]Agents/obsidian-settings.md*[[% endif %]]"
+  - "[[% if not pii %]].scripts/pii-register-check*[[% endif %]]"
+  - "[[% if not pii %]].scripts/pii-merge-queue*[[% endif %]]"
+  - "[[% if not pii %]]Agents/sensitive-data.md*[[% endif %]]"
+  - "[[% if not pii %]]Agents/pii-allowlist.md*[[% endif %]]"
+  - "[[% if not pii %]]Resources/pii-register.md*[[% endif %]]"
+  - "[[% if not store %]].scripts/store-image*[[% endif %]]"
+  - "[[% if not store %]].scripts/store-move*[[% endif %]]"
+  - "[[% if not store %]]Resources/file-store.md*[[% endif %]]"
+
+owner:
+  type: str
+  help: Owner's first name, as agents write it ("Robin")
+owner_full:
+  type: str
+  help: Owner's full name
+  default: "[[= owner =]]"
+owner_slug:
+  type: str
+  help: Slug of the owner's Person note
+  default: "[[= owner_full | lower | replace(' ', '-') =]]"
+vault:
+  type: str
+  help: Vault name (short, lowercase)
+  default: notes
+
+store:
+  type: bool
+  help: "Module store: attachments in an external file store (_files symlink) plus manifest"
+  default: true
+store_path:
+  type: str
+  help: File store path (a ~ path; never inside the synced vault)
+  default: "~/[[= vault =]]-files"
+  when: "[[= store =]]"
+pii:
+  type: bool
+  help: "Module pii: personal values live in a password manager; notes hold keys"
+  default: true
+false_facts:
+  type: bool
+  help: "Module false-facts: a list of banned claims agents must not write"
+  default: true
+obsidian:
+  type: bool
+  help: "Module obsidian: Obsidian settings (.obsidian/, written once) and the plugin installer"
+  default: true
+backup:
+  type: bool
+  help: "Module backup: nightly restic backups (.scripts/restic/, launchd or cron) and the restore runbook"
+  default: false

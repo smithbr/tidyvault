@@ -1,0 +1,24 @@
+---
+title: File store
+type: reference
+people:
+  - "[[[[= owner_slug =]]]]"
+created: [[= '%Y-%m-%d' | strftime =]]
+---
+# File store
+
+Where this vault's attachments live: outside the vault, so sync and git stay small ([[strict-rules]] S1, [[organization]] File store).
+
+## Setup
+
+- **Path:** `[[= store_path =]]`, laid out as `<note-slug>/<file>`.
+- **Link:** `_files` at the vault root is a symlink to it: `ln -s [[= store_path =]] _files`. Git-ignored and excluded in Obsidian.
+- **Encrypted image (optional):** `.scripts/store-image` creates and mounts an encrypted disk image at the store path; `status`, `unlock`, `lock`.
+- **Moving files in:** `.scripts/store-move --dry-run`, then without `--dry-run`.
+- **Manifest:** `_attachments/_raw/manifest.tsv`, one row per imported file.
+
+## Decisions
+
+## Timeline
+
+- [[= '%Y-%m-%d' | strftime =]] — Store set up by tidyvault.
