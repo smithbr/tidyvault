@@ -61,6 +61,15 @@ class PiiMergeQueue(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stderr); self.assertIn("Nothing uploaded", p.stdout)
         self.assertEqual(self.store.read_text(), REGISTER); self.assertEqual(self.queue.read_text(), QUEUE)
 
+    def test_failed_check_keeps_queue(self):
+        # an upload that doesn't stick (the fake drops every edit): the check fails and the queue is left alone
+        op = Path(self.tmp.name) / "bin" / "op"
+        op.write_text(FAKE_OP.replace('"document edit") cp "$4" "$store"', '"document edit") true'))
+        p = self.run_it(answers="y\ny\n")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("Check FAILED", p.stdout)
+        self.assertEqual(self.queue.read_text(), QUEUE, "queue kept when keys didn't land")
+
     def test_without_op_it_refuses(self):
         env = dict(self.env, PATH=str(Path(self.tmp.name) / "nowhere"))
         p = subprocess.run([sys.executable, str(SCRIPT), "--dry-run"], capture_output=True, text=True, env=env)

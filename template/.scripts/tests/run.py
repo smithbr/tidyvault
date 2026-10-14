@@ -1230,6 +1230,13 @@ class Config(unittest.TestCase):
         _, found = lint_json(root, "--only", "tasks")
         self.assertTrue(any("other than Robin" in f["message"] for f in found), json.dumps(found, indent=1))
 
+    def test_proper_nouns_from_config(self):
+        root = self._vault(["store", "pii"], "lint:\n  proper_nouns:\n    - Northwind\n    - Lisbon\n")
+        (root / "Resources/visit-northwind-in-lisbon-soon.md").write_text(
+            "---\ntitle: Visit Northwind in Lisbon soon\ntype: reference\n---\n\n# Visit Northwind in Lisbon soon\n")
+        _, found = lint_json(root, "--only", "title")
+        self.assertFalse([f for f in found if "Title Case" in f["message"]], json.dumps(found, indent=1))
+
     def test_proper_phrases_from_config(self):
         root = self._vault(["store", "pii"], "lint:\n  proper_phrases:\n    - Big Blue Widget Co\n")
         (root / "Resources/visit-big-blue-widget-co-labs.md").write_text(
@@ -1321,6 +1328,71 @@ class Migration(unittest.TestCase):
         (self.root / VL.CONFIG_FILE).write_text("owner: Robin\nlint:\n  proper_nouns: []\n")
         _, found = lint_json(self.root, "--only", "title")
         self.assertTrue([f for f in found if "Title Case" in f["message"]], "without the config the title reads as Title Case")
+
+
+class LocalLayerAndMigration(unittest.TestCase):
+    """What a vault adds on top of the kit (Agents/local/), and the shape a migrated vault takes:
+    retired fields from an old system, read-only source URLs, a question task, local role modes."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name) / "v"
+        shutil.copytree(FIX / "good", self.root)
+        (self.root / VL.CONFIG_FILE).write_text(
+            "owner: Robin\nowner_full: Robin Vale\nowner_slug: robin-vale\nvault: v\n"
+            "modules:\n  - store\n  - pii\n  - false-facts\n  - obsidian\n"
+            "lint:\n  read_only_url_patterns:\n    - old-wiki\\.example\n  retired_fields:\n    - old_id\n    - old_db\n")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def put(self, rel, text):
+        p = self.root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text)
+
+    def lint(self, *args):
+        return lint_json(self.root, *args)
+
+    def test_local_layer_lints_clean(self):
+        self.put("Agents/local/local-rules.md",
+                 "---\ntitle: Local rules\ntype: manual\n---\n# Local rules\n\nPart of the [[README]].\n\n## Rules\n\n"
+                 "- **L1. The old wiki is read-only.** Its URLs are in the lint config.\n")
+        self.put("Agents/local/roles/role-vault-ops-local.md",
+                 "---\ntitle: \"Role: vault ops (local)\"\ntype: manual\n---\n# Role: vault ops (local)\n\n"
+                 "Part of the [[README]]. Modes this vault adds.\n\n## Mode: Mail\n\nTriage the inbox.\n")
+        self.put("Agents/local/external-systems-local.md",
+                 "---\ntitle: External systems (local)\ntype: manual\n---\n# External systems (local)\n\n"
+                 "Part of the [[README]].\n\n| System | Owns | Agents may | Agents may not |\n|---|---|---|---|\n| Old wiki | Nothing | Read | Write |\n")
+        code, found = self.lint()
+        self.assertEqual([f for f in found if f["severity"] != "info"], [], json.dumps(found, indent=1))
+
+    def test_role_page_outside_roles_or_local_roles_is_an_error(self):
+        self.put("Agents/local/role-stray.md", "---\ntitle: \"Role: stray\"\ntype: manual\n---\n# Role: stray\n\nPart of the [[README]].\n")
+        _, found = self.lint("--only", "structure")
+        self.assertTrue(any(f["path"] == "Agents/local/role-stray.md" and "role-<name>-local.md" in f["message"] for f in found),
+                        json.dumps(found, indent=1))
+
+    def test_migrated_task_shape(self):
+        self.put("Tasks/answer-the-wiki-question.md",
+                 "---\ntitle: Answer the wiki question\nstatus: inbox\narea:\n  - \"[[health]]\"\nold_id: abc123\nold_db: Tasks\ncreated: 2026-10-01\n---\n"
+                 "# Answer the wiki question\n\n## Details\n\n**Question**:: keep the old wiki page? Source https://old-wiki.example/p/9\n")
+        _, found = self.lint("--only", "schema,source-urls")
+        msgs = [(f["check"], f["severity"]) for f in found if f["path"] == "Tasks/answer-the-wiki-question.md"]
+        self.assertIn(("schema", "error"), msgs, json.dumps(found, indent=1))      # the old system's fields
+        self.assertIn(("source-urls", "info"), msgs, json.dumps(found, indent=1))  # its URL in the body: info only
+        lint(self.root, "--fix", "Tasks/answer-the-wiki-question.md")
+        text = (self.root / "Tasks/answer-the-wiki-question.md").read_text()
+        self.assertNotIn("old_id", text); self.assertNotIn("old_db", text)
+        self.assertIn("**Question**:: keep", text)
+        _, found = self.lint("--only", "schema")
+        self.assertFalse([f for f in found if f["path"] == "Tasks/answer-the-wiki-question.md"], json.dumps(found, indent=1))
+
+    def test_source_url_in_frontmatter_is_an_error(self):
+        self.put("Resources/imported-page.md",
+                 "---\ntitle: Imported page\ntype: reference\nurl: https://old-wiki.example/p/1\n---\n\n# Imported page\n\nText.\n")
+        _, found = self.lint("--only", "source-urls")
+        self.assertTrue(any(f["path"] == "Resources/imported-page.md" and f["severity"] == "error" for f in found), json.dumps(found, indent=1))
 
 
 class RealVault(unittest.TestCase):
