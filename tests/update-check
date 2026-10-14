@@ -11,11 +11,11 @@ kit="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 work="$(mktemp -d "${TMPDIR:-/tmp}/update-check.XXXXXX")"
 trap 'rm -rf "${work}"' EXIT
 fail=0
-ok()   { printf 'ok    %s\n' "$1"; }
-bad()  { printf 'FAIL  %s\n' "$1"; fail=1; }
-check() { if eval "$2"; then ok "$1"; else bad "$1"; fi; }
-lint_ok() { local out; if out="$(cd "$1" && python3 .scripts/vault-lint 2>&1)"; then return 0; else printf '%s\n' "${out}" | grep -E ": (error|warning): |total" | head -20; return 1; fi; }
-git_() { git -C "$1" -c user.name=t -c user.email=t@t "${@:2}"; }
+ok()   { printf 'ok    %s\n' "${1}"; }
+bad()  { printf 'FAIL  %s\n' "${1}"; fail=1; }
+check() { if eval "${2}"; then ok "${1}"; else bad "${1}"; fi; }
+lint_ok() { local out; if out="$(cd "${1}" && python3 .scripts/vault-lint 2>&1)"; then return 0; else printf '%s\n' "${out}" | grep -E ": (error|warning): |total" | head -20; return 1; fi; }
+git_() { git -C "${1}" -c user.name=t -c user.email=t@t "${@:2}"; }
 
 # A clone with its own throwaway tags: the real repo's tags and history are never touched.
 git clone -q "${kit}" "${work}/kit"
@@ -69,7 +69,7 @@ check "adopt: existing task kept"              "grep -q 'Water the plants' '${e}
 check "adopt: existing Person kept (seed)"     "grep -q 'Lives in Lisbon' '${e}/People/priya-nair.md'"
 check "adopt: existing Resource kept (seed)"   "grep -q 'The quote' '${e}/Resources/kitchen-quote.md'"
 check "adopt: local role page kept"            "grep -q 'Modes this vault adds' '${e}/Agents/local/roles/role-vault-ops-local.md'"
-check "adopt: kit pages present"               "test -f '${e}/AGENTS.md' && test -f '${e}/Agents/strict-rules.md' && test -x '${e}/.scripts/vault-lint'"
+check "adopt: kit pages present"               "[[ -f '${e}/AGENTS.md' && -f '${e}/Agents/strict-rules.md' && -x '${e}/.scripts/vault-lint' ]]"
 check "adopt: answers written"                 "grep -q '_commit: v9.0.1' '${e}/.copier-answers.yml'"
 check "adopt: .gitignore is kit-managed (overwritten; re-add local lines after adopting)" "! grep -q 'custom-ignore' '${e}/.gitignore'"
 check "adopt: lints clean"                     "lint_ok '${e}'"

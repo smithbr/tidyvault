@@ -10,7 +10,7 @@ trap 'rm -rf "${out}"' EXIT
 fail=0
 
 render() {  # render NAME [copier -d answers...]
-  local name="$1"; shift
+  local name="${1}"; shift
   copier copy --defaults --quiet -d owner=Robin -d "owner_full=Robin Vale" -d "vault=${name}" "$@" \
     "${kit}" "${out}/${name}" 2>/dev/null
 }
@@ -40,7 +40,7 @@ fi
 
 excl=(--exclude-dir=.git --exclude=kit-check --exclude=leak-patterns.txt --exclude=LICENSE --exclude=demo.gif)
 if [[ -n "${1:-}" ]]; then
-  hits="$(grep -rliwFf "$1" "${kit}" "${excl[@]}" || true)"
+  hits="$(grep -rliwFf "${1}" "${kit}" "${excl[@]}" || true)"
   [[ -z "${hits}" ]] || { printf 'FAIL leak words in:\n%s\n' "${hits}"; fail=1; }
 fi
 if hits="$(grep -rlEf "${kit}/tests/leak-patterns.txt" "${kit}" "${excl[@]}" --exclude-dir=fixtures)"; then
