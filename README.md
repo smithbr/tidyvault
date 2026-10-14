@@ -10,7 +10,7 @@ Point Claude Code, Codex, or Cursor at a plain vault and it misfiles notes, inve
 > **You:** Delete the old estate notes.
 > **Agent:** That's an erasure, which I don't do unasked. Say "erase the estate notes" to confirm, or I can archive them instead.
 
-![A terminal rendering a vault, linting it, dropping a capture note, and running the GTD review](docs/demo.gif)
+![A terminal answering the setup questions for a new vault, listing its folders, and linting it clean](docs/demo.gif)
 
 ## Try it
 
