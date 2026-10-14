@@ -38,12 +38,6 @@ Needs git, Python 3.12+, and [uv](https://docs.astral.sh/uv/); 1Password and Bac
 
 ## Good to know
 
-- It creates a new vault and never edits an existing one. Moving a vault in is on the roadmap.
-- Nothing leaves your machine unless you set it up: the Git plugin pushes to a remote only if you add one, and backups go to your B2 bucket already encrypted. The rest is folders, Markdown, and standard-library Python scripts.
-- Version 0.1: one person's vault system, generalized and tested daily on a real vault. Rough edges likely; open an issue.
-
-## Development
-
-`tests/kit-check` renders every option on and off, lints both, runs the tests, and greps for leaks. Design notes are in `docs/`.
+- Nothing leaves your machine unless you set it up: the Git plugin pushes to a remote only if you add one, and backups go to your B2 bucket already encrypted.
 
 MIT.
