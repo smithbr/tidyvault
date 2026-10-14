@@ -39,7 +39,7 @@ else
   echo "tests:   FAIL (run .scripts/tests/run.py and unittest discover in a rendered vault)"; fail=1
 fi
 
-excl=(--exclude-dir=.git --exclude=kit-check --exclude=leak-patterns.txt --exclude=LICENSE --exclude=demo.gif)
+excl=(--exclude-dir=.git --exclude=kit-check --exclude=leak-patterns.txt --exclude=LICENSE)
 if [[ -n "${1:-}" ]]; then
   hits="$(grep -rliwFf "${1}" "${kit}" "${excl[@]}" || true)"
   [[ -z "${hits}" ]] || { printf 'FAIL leak words in:\n%s\n' "${hits}"; fail=1; }
