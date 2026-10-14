@@ -6,6 +6,10 @@
 #      its notes, People, Resources, and Agents/local/ survive; the kit's pages appear.
 # Usage: tests/update-check. Needs git, copier, python3. Exit 0 only when every assertion holds.
 set -euo pipefail
+# Copier's update deletes its temporary clone while git's background gc may still write into it
+# (OSError: Directory not empty: '.git' on Linux). Turn background maintenance off for every git
+# call this script and Copier make; GIT_CONFIG_* applies to child processes without touching ~/.gitconfig.
+export GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=gc.auto GIT_CONFIG_VALUE_0=0 GIT_CONFIG_KEY_1=maintenance.auto GIT_CONFIG_VALUE_1=false
 
 kit="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 work="$(mktemp -d "${TMPDIR:-/tmp}/update-check.XXXXXX")"
