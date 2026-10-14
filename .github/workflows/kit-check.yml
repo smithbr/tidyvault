@@ -9,10 +9,12 @@ jobs:
   linux:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0   # update-check clones the checkout; git can't clone from a shallow repo
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v10.3.0   # no floating major tags since v8
+        with:
+          enable-cache: false   # only installs copier; nothing worth caching
       - run: uv tool install copier
       - name: kit-check with the private leak words
         env:
@@ -25,9 +27,11 @@ jobs:
   macos:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0   # update-check clones the checkout; git can't clone from a shallow repo
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v10.3.0   # no floating major tags since v8
+        with:
+          enable-cache: false   # only installs copier; nothing worth caching
       - run: uv tool install copier
       - run: tests/kit-check
