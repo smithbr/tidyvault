@@ -32,7 +32,7 @@ Blank lines around a block: put the blank line inside the block (right after `[[
 
 | Variable | Value |
 |---|---|
-| `owner` | Owner's first name as written in agent prose ("Robin") |
+| `owner` | Owner's first name as written in agent prose ("Robin"); defaults to the first word of `owner_full` |
 | `owner_full` | Full name ("Robin Vale") |
 | `owner_slug` | Slug of the owner's Person note (`robin-vale`) |
 | `vault` | Vault name (`notes`) |

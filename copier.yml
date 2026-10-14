@@ -50,47 +50,55 @@ _exclude:
   - "[[% if not store %]].scripts/store-move*[[% endif %]]"
   - "[[% if not store %]]Resources/file-store.md*[[% endif %]]"
 
-owner:
-  type: str
-  help: Owner's first name, as agents write it ("Robin")
 owner_full:
   type: str
-  help: Owner's full name
-  default: "[[= owner =]]"
+  help: Your full name ("Robin Vale")
+  validator: "[[% if not owner_full.strip() %]]Enter a name.[[% endif %]]"
+owner:
+  type: str
+  help: First name agents call you by in notes
+  default: "[[= owner_full.split()[0] if owner_full.split() else '' =]]"
+  validator: "[[% if not owner.strip() %]]Enter a name.[[% endif %]]"
 owner_slug:
   type: str
-  help: Slug of the owner's Person note
-  default: "[[= owner_full | lower | replace(' ', '-') =]]"
+  help: File name of your own note in People/ (Enter keeps the suggestion)
+  default: "[[= owner_full.strip() | lower | replace(' ', '-') =]]"
+  validator: "[[% if not owner_slug or owner_slug != owner_slug | lower or ' ' in owner_slug or '/' in owner_slug %]]Lowercase, with hyphens for spaces (robin-vale).[[% endif %]]"
 vault:
   type: str
-  help: Vault name (short, lowercase)
+  help: Vault name, short and lowercase; it also names the vault's 1Password items
   default: notes
+  validator: "[[% if not vault or vault != vault | lower or ' ' in vault or '/' in vault %]]Lowercase, no spaces or slashes (notes).[[% endif %]]"
 
 store:
   type: bool
-  help: "Module store: attachments in an external file store (_files symlink) plus manifest"
+  help: Keep attachments (PDFs, images) in a folder outside the vault, linked in as _files?
   default: true
 store_path:
   type: str
-  help: File store path (a ~ path; never inside the synced vault)
+  help: That folder, as a ~ path, outside any synced folder
   default: "~/[[= vault =]]-files"
   when: "[[= store =]]"
+  validator: "[[% if not store_path.startswith('~/') %]]Start the path with ~/ (~/notes-files).[[% endif %]]"
 pii:
   type: bool
-  help: "Module pii: personal values live in 1Password (the PII register document); notes hold keys"
+  help: Keep personal details (account numbers, IDs, addresses) in 1Password, with notes holding only a key to each?
   default: true
 false_facts:
   type: bool
-  help: "Module false-facts: a list of banned claims agents must not write"
+  help: Keep a list of claims agents must never write, such as mistakes they made before?
   default: true
 obsidian:
   type: bool
-  help: "Module obsidian: Obsidian settings (.obsidian/, written once) and the plugin installer"
+  help: Include Obsidian settings (.obsidian/, written once) and a plugin installer?
   default: true
 backup:
   type: bool
-  help: "Module backup: nightly restic backups to Backblaze B2 (.scripts/restic/, launchd or cron) and the restore runbook"
+  help: Back up the vault nightly to Backblaze B2 with restic? Needs a B2 account.
   default: false
+
+_message_before_copy: |
+  A few questions about you and the vault, then five optional parts. Enter accepts the suggested answer.
 
 _message_after_copy: |
   Vault rendered. Next, from the vault folder:
