@@ -1,6 +1,6 @@
-# Vault backup (restic)
+# Vault backup (restic + Backblaze B2)
 
-Nightly, encrypted, off-site snapshots of the vault folder[[%+ if store +%]] and the file store (`[[= store_path =]]`)[[%+ endif +%]], with restic. Any restic backend works (Backblaze B2, S3, SFTP, a local disk). What is backed up where, and the restore runbook: `Resources/vault-backup-and-restore.md`.
+Nightly, encrypted, off-site snapshots of the vault folder[[%+ if store +%]] and the file store (`[[= store_path =]]`)[[%+ endif +%]], with restic, in a Backblaze B2 bucket. What is backed up where, and the restore runbook: `Resources/vault-backup-and-restore.md`. The guided setup, `python3 .scripts/vault-setup`, walks through every step below and says which are still to do.
 
 ## Files
 
@@ -16,24 +16,34 @@ Nightly, encrypted, off-site snapshots of the vault folder[[%+ if store +%]] and
 
 ## Settings
 
-Nothing personal lives in the vault. Two files outside it, both mode 600 in a mode 700 folder:
+Nothing personal lives in the vault. Two files outside it, both mode 600 in a mode 700 folder, with copies of every secret in 1Password:
 
 - `~/.config/restic/[[= vault =]].env`: written by the first `install.sh` run, with placeholders. Fill in:
 
   | Key | Value |
   | --- | --- |
-  | `VAULT_REPOSITORY` | The vault repository, e.g. `b2:<bucket>:vault` |
+  | `VAULT_REPOSITORY` | The vault repository in your bucket: `b2:<bucket>:vault` |
 [[% if store %]]
-  | `STORE_REPOSITORY` | The file store repository, e.g. `b2:<bucket>:store` |
+  | `STORE_REPOSITORY` | The file store repository: `b2:<bucket>:store` |
 [[% endif %]]
-  | Backend credentials | Whatever your backend reads from the environment: `B2_ACCOUNT_ID` and `B2_ACCOUNT_KEY`, or `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`, and so on |
+  | `B2_ACCOUNT_ID`, `B2_ACCOUNT_KEY` | The B2 application key's keyID and applicationKey (Backblaze B2, below) |
   | `VAULT_BACKUP_PATH` | The vault folder (pre-filled) |
   | `BACKUP_HOST` | The snapshot host name (pre-filled; keep it stable, retention is per host) |
   | `KEEP_DAILY`, `KEEP_WEEKLY`, `KEEP_MONTHLY`, `CHECK_SUBSET` | Optional; defaults 7, 4, 12, `5%` |
 
-- `~/.config/restic/[[= vault =]].password`: the repository password, one line. Keep a copy in your password manager: without it the backups can't be decrypted.
+- `~/.config/restic/[[= vault =]].password`: the repository password, one line. `vault-setup` creates the 1Password item **[[= vault =]] restic repository** with a generated password and writes it here. Without that item the backups can't be decrypted.
 
 Set `VAULT_RESTIC_CONFIG` to use a folder other than `~/.config/restic`.[[%+ if store +%]] `store-backup` reads `VAULT_FILES` and `VAULT_FILES_IMAGE` like `store-image`.[[%+ endif +%]]
+
+## Backblaze B2
+
+One bucket, one application key that can reach only that bucket, both made once in the Backblaze web console:
+
+1. **Bucket.** B2 Cloud Storage, Buckets, Create a Bucket: a private bucket, e.g. `[[= vault =]]-backup`. Leave encryption and Object Lock off: restic encrypts everything itself, and Object Lock blocks pruning.
+2. **Application key.** Application Keys, Add a New Application Key: a name like `[[= vault =]]-restic`, access to that bucket only, Read and Write, no file-name prefix. The applicationKey is shown once: save keyID and applicationKey in 1Password as **[[= vault =]] backblaze b2** before closing the page.
+3. **Settings file.** `B2_ACCOUNT_ID=<keyID>`, `B2_ACCOUNT_KEY=<applicationKey>`, `VAULT_REPOSITORY=b2:<bucket>:vault`[[%+ if store +%]], `STORE_REPOSITORY=b2:<bucket>:store`[[%+ endif +%]]. `vault` and `store` are folders restic creates inside the bucket on `--init`.
+
+B2 charges for storage and for downloads beyond the free daily allowance; a nightly backup of a text vault costs cents, a full restore is where the download fee shows up.
 
 ## Install or update
 
@@ -66,7 +76,6 @@ Copy back only the files you need, then run `python3 .scripts/vault-lint`.
 
 ## Rebuild on a new machine
 
-1. Install restic.
-2. Recreate `~/.config/restic/[[= vault =]].env` and `[[= vault =]].password` from your password manager (mode 600, folder mode 700).
-3. From any copy of the vault (or a restore), run `.scripts/restic/install.sh` (no `--init`: the repositories exist).
-4. `vault-restore`, then move the restored vault into place.
+1. Install restic and the 1Password CLI, signed in.
+2. From any copy of the vault (or a restore), run `python3 .scripts/vault-setup` and say yes at each step: it writes the settings file for you to fill in from **[[= vault =]] backblaze b2**, the password file from **[[= vault =]] restic repository**, and schedules the jobs (`--init` skips repositories that exist).
+3. `vault-restore`, then move the restored vault into place.

@@ -57,13 +57,14 @@ if [[ ! -e "${env_file}" ]]; then
             umask 077
             cat > "${env_file}" <<ENV
 # restic settings for the [[= vault =]] vault. Secrets: keep this file mode 600.
-# Repository URLs, for example b2:<bucket>:vault or s3:<endpoint>/<bucket>/vault
+# Repositories in your Backblaze B2 bucket: b2:<bucket>:vault[[%+ if store +%]] and b2:<bucket>:store[[%+ endif +%]]
 VAULT_REPOSITORY=
 [[% if store %]]
 STORE_REPOSITORY=
 [[% endif %]]
-# Backend credentials restic reads from the environment, for example
-# B2_ACCOUNT_ID= and B2_ACCOUNT_KEY=, or AWS_ACCESS_KEY_ID= and AWS_SECRET_ACCESS_KEY=
+# The B2 application key for that bucket (keyID and applicationKey; keep a copy in 1Password)
+B2_ACCOUNT_ID=
+B2_ACCOUNT_KEY=
 # What to back up, and the snapshot host name
 VAULT_BACKUP_PATH=${vault_dir}
 BACKUP_HOST=$(hostname -s)
@@ -78,9 +79,9 @@ fi
 status=0
 if [[ -r "${env_file}" ]]; then
 [[% if store %]]
-    required=(VAULT_REPOSITORY STORE_REPOSITORY VAULT_BACKUP_PATH)
+    required=(VAULT_REPOSITORY STORE_REPOSITORY B2_ACCOUNT_ID B2_ACCOUNT_KEY VAULT_BACKUP_PATH)
 [[% else %]]
-    required=(VAULT_REPOSITORY VAULT_BACKUP_PATH)
+    required=(VAULT_REPOSITORY B2_ACCOUNT_ID B2_ACCOUNT_KEY VAULT_BACKUP_PATH)
 [[% endif %]]
     for key in "${required[@]}"; do
         if grep -qE "^${key}=.+" "${env_file}"; then
@@ -94,7 +95,7 @@ fi
 if [[ -s "${password_file}" ]]; then
     printf 'found      %s\n' "${password_file}"
 else
-    printf 'MISSING    %s (the repository password, mode 600; keep a copy in your password manager)\n' "${password_file}" >&2
+    printf 'MISSING    %s (the repository password, mode 600; python3 .scripts/vault-setup writes it from 1Password)\n' "${password_file}" >&2
     status=1
 fi
 if ! PATH="/opt/homebrew/bin:/usr/local/bin:/home/linuxbrew/.linuxbrew/bin:${PATH}" command -v restic >/dev/null 2>&1; then
