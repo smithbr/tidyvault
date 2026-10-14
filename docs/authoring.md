@@ -8,7 +8,7 @@ How kit files are laid out and rendered. Read before editing `copier.yml` or `te
 |---|---|---|---|
 | `template/` | The vault: manual, roles, `AGENTS.md`, scripts, config | rendered | re-rendered, 3-way merged with the vault |
 | `template/` seeds (`_skip_if_exists`) | `Home.md`, `People/*.md`, `Areas/**`, `Resources/**`, `.obsidian/**`, `Agents/changelog.md`, `Agents/pii-allowlist.md`, `Agents/local/**` | rendered | never touched |
-| `copier.yml` | Questions, `_exclude` module conditionals, seeds, delimiters | | |
+| `copier.yml` | Questions, `_exclude` module conditionals, seeds, delimiters, the after-copy message (next steps, pointing at `.scripts/vault-setup`) | | |
 | `tests/kit-check` | Renders every-module-on and every-module-off, lints, runs the vault's tests, greps for leaks | | |
 
 A path under `template/` is the path in the vault. File and folder names may use markers too (`People/[[= owner_slug =]].md.jinja`).
@@ -48,7 +48,7 @@ No absolute paths: the vault location isn't a template value.
 - Part of a file belongs to a module: wrap it in `[[% if <module> %]]`. Never add a second copy of a file to override the first.
 - A link to a module's page (`[[sensitive-data]]`, `[[obsidian-settings]]`, `[[false-facts]]`, `[[vault-backup-and-restore]]`, `[[file-store]]`) must sit inside that module's block, or the every-module-off render has a dangling link.
 - A check in `vault-lint` that belongs to a module is listed in its `CHECK_MODULES`; `.tidyvault.yml` tells the linter which modules are on.
-- A new module: add the question to `copier.yml`, its entry in the `modules:` loop of `template/.tidyvault.yml.jinja`, its `_exclude` lines, and a row in the README table.
+- A new module: add the question to `copier.yml`, its entry in the `modules:` loop of `template/.tidyvault.yml.jinja`, its `_exclude` lines, and a row in the README table. If it needs setting up, add its steps to `.scripts/vault-setup` and name it in `_message_after_copy`.
 
 ## Rule IDs
 

@@ -20,9 +20,10 @@ uvx copier copy gh:smithbr/tidyvault my-vault
 
 1. Answer the questions (defaults are fine) and open `my-vault` in Obsidian.
 2. Install the plugins it asks for.
-3. In Claude Code, from that folder: `/vault-pm`, then "what now?".
+3. `python3 .scripts/vault-setup` walks you through the rest: git history, the [1Password CLI](https://developer.1password.com/docs/cli/) and the PII register document, and (backup module) nightly [restic](https://restic.net/) backups to a Backblaze B2 bucket, with the repository password kept in 1Password. It offers to do each step it can; rerun it until every line says ok.
+4. In Claude Code, from that folder: `/vault-pm`, then "what now?".
 
-Needs git, Python 3.12+, and [uv](https://docs.astral.sh/uv/). Any agent that reads `AGENTS.md` works; the `/vault-*` commands are Claude Code extras.
+Needs git, Python 3.12+, and [uv](https://docs.astral.sh/uv/); 1Password and Backblaze B2 are the only password manager and backup target supported so far. Any agent that reads `AGENTS.md` works; the `/vault-*` commands are Claude Code extras.
 
 ## What's inside
 
@@ -37,7 +38,7 @@ Needs git, Python 3.12+, and [uv](https://docs.astral.sh/uv/). Any agent that re
 
 - It creates a new vault and never edits an existing one. Moving a vault in is on the roadmap.
 - Nothing leaves your machine: folders, Markdown, and one standard-library Python script.
-- Personal data stays in your password manager; notes hold a key, and the linter catches a value that slips through. Optional, on by default.
+- Personal data stays in 1Password; notes hold a key, and the linter catches a value that slips through. Optional, on by default.
 - Version 0.1: one person's vault system, generalized and tested daily on a real vault. Rough edges likely; open an issue.
 
 ## Development

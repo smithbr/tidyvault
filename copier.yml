@@ -77,7 +77,7 @@ store_path:
   when: "[[= store =]]"
 pii:
   type: bool
-  help: "Module pii: personal values live in a password manager; notes hold keys"
+  help: "Module pii: personal values live in 1Password (the PII register document); notes hold keys"
   default: true
 false_facts:
   type: bool
@@ -89,5 +89,14 @@ obsidian:
   default: true
 backup:
   type: bool
-  help: "Module backup: nightly restic backups (.scripts/restic/, launchd or cron) and the restore runbook"
+  help: "Module backup: nightly restic backups to Backblaze B2 (.scripts/restic/, launchd or cron) and the restore runbook"
   default: false
+
+_message_after_copy: |
+  Vault rendered. Next, from the vault folder:
+  [[% if obsidian %]]
+    - Open it in Obsidian, then: python3 .scripts/obsidian-plugins
+  [[% endif %]]
+    - python3 .scripts/vault-setup
+      A walkthrough of what is left: git history[[% if pii %]], the 1Password CLI and the PII register document[[% endif %]][[% if backup %]], restic backups to Backblaze B2 with the password kept in 1Password[[% endif %]].
+      It offers to do each step it can; rerun it until every line says ok.

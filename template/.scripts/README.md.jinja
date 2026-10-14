@@ -4,6 +4,7 @@ Tooling for the vault. Hidden from Obsidian (dot-folder), not notes.
 
 | Path | What it is |
 | --- | --- |
+| `vault-setup` | First-time setup walkthrough: git history[[%+ if obsidian +%]], the Obsidian plugins[[%+ endif +%]][[%+ if pii +%]], the 1Password CLI and the PII register document[[%+ endif +%]][[%+ if backup +%]], restic with the Backblaze B2 settings, the repository password kept in 1Password, the repositories and nightly jobs[[%+ endif +%]]. Checks each step and offers to do the ones it can; `--check` only reports. Rerun until every line says ok. |
 | `vault-lint` | Validator for `Agents/` rules, plus the GTD review for agents without Obsidian. Python 3 stdlib only. |
 | `import-files` | Vault intake helper: `inventory` (every file in `_imports/` and `_captures/` with size, type, sha256, duplicate or new, note or foreign, code flags), `file --src --slug --name [--dry-run]` (moves byte for byte into `_files/<slug>/`, or `_attachments/<slug>/` when the store is locked or absent; manifest row; checksum check; prints the embed path; a duplicate gets a row and no move), `done-capture <path>`, `fence-fix <path>`. Never deletes an original. Tests: `tests/test_import_files.py`. |
 | `tidy-check` | Read-only vault docs pre-pass (Tidy mode): orphans, duplicate-looking titles and aliases, today's new Resources and People as a `Tidy <Mon D> imports` list, and their broken links. |

@@ -1,0 +1,224 @@
+#!/usr/bin/env python3
+"""Walk through the vault's first-time setup, one step at a time.
+
+  python3 .scripts/vault-setup            check every step; offer to do the ones it can
+  python3 .scripts/vault-setup --check    report only, no prompts (exit 1 while anything is left)
+
+Steps, by module (read from .tidyvault.yml): git history; the Obsidian community
+plugins (obsidian); the 1Password CLI, signed in, and the PII register document
+(pii); restic, the Backblaze B2 settings, the repository password kept in
+1Password, then the repositories and the nightly jobs (backup). Safe to rerun
+until every line says ok. Prints keys, titles and paths, never a secret.
+"""
+from __future__ import annotations
+
+import importlib.machinery
+import importlib.util
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+ROOT = Path(os.environ.get("VAULT_ROOT") or HERE.parent)
+NAME = os.path.basename(sys.argv[0])
+# launchd, cron and a fresh shell may lack Homebrew's bin; a tool earlier on PATH still wins.
+os.environ["PATH"] += ":/opt/homebrew/bin:/usr/local/bin:/home/linuxbrew/.linuxbrew/bin"
+
+
+def _load_lint():
+    sys.dont_write_bytecode = True  # no __pycache__ inside the vault
+    loader = importlib.machinery.SourceFileLoader("vault_lint", str(HERE / "vault-lint"))
+    spec = importlib.util.spec_from_loader("vault_lint", loader)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["vault_lint"] = mod  # dataclasses resolve the module by name
+    loader.exec_module(mod)
+    return mod
+
+
+CFG = _load_lint().load_config(ROOT)
+VAULT = CFG["vault"]
+MODULES = CFG["modules"]
+HOME = Path.home()
+RESTIC_CFG = Path(os.environ.get("VAULT_RESTIC_CONFIG") or HOME / ".config" / "restic")
+ENV_FILE = RESTIC_CFG / f"{VAULT}.env"
+PASSWORD_FILE = RESTIC_CFG / f"{VAULT}.password"
+BIN = HOME / ".local" / "share" / f"{VAULT}-backup"
+REGISTER_ITEM = os.environ.get("PII_REGISTER_ITEM", f"{VAULT} PII register")
+PASSWORD_ITEM = f"{VAULT} restic repository"
+REGISTER_HEADER = "| Key | Category | Value | Where used | Notes |\n|---|---|---|---|---|\n"
+ASK = "--check" not in sys.argv[1:]
+
+
+def run(*cmd, **kw):
+    return subprocess.run(cmd, capture_output=True, text=True, **kw)
+
+
+def short(path):
+    """A path with the home folder as ~, for printing."""
+    return "~" + str(path)[len(str(HOME)):] if str(path).startswith(str(HOME)) else str(path)
+
+
+def step(label, done, hints=(), action=None):
+    """Print one checklist line; offer `action` (a callable returning True when done) for a todo."""
+    if done:
+        print(f"ok        {label}")
+        return True
+    print(f"todo      {label}")
+    for h in hints:
+        print(f"          {h}")
+    if action and ASK:
+        try:
+            answer = input("          Do it now? [y/N] ").strip().lower()
+        except EOFError:
+            answer = ""
+        if answer == "y" and action():
+            print(f"ok        {label}")
+            return True
+    return False
+
+
+def env_has(key):
+    if not ENV_FILE.is_file():
+        return False
+    return any(line.startswith(f"{key}=") and line.strip() != f"{key}=" for line in ENV_FILE.read_text().splitlines())
+
+
+def op_ok(*args):
+    return shutil.which("op") is not None and run("op", *args).returncode == 0
+
+
+def write_secret(path, value):
+    old = os.umask(0o077)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.parent.chmod(0o700)
+        path.write_text(value + "\n")
+        path.chmod(0o600)
+    finally:
+        os.umask(old)
+
+
+# Steps. Each action reports what went wrong itself and returns False to leave the line todo.
+
+
+def git_init():
+    for cmd in (["git", "init", "-q"], ["git", "add", "-A"], ["git", "commit", "-q", "-m", "New vault"]):
+        p = run(*cmd, cwd=ROOT)
+        if p.returncode:
+            print(f"          {' '.join(cmd)} failed: {p.stderr.strip()}")
+            return False
+    return True
+
+
+def install_plugins():
+    return subprocess.run([sys.executable, str(HERE / "obsidian-plugins"), "--root", str(ROOT)]).returncode == 0
+
+
+def create_register():
+    text = f"# {REGISTER_ITEM}\n\n## {CFG['owner_full'] or CFG['owner']}\n\n{REGISTER_HEADER}"
+    with tempfile.TemporaryDirectory() as tmp:
+        draft = Path(tmp, "pii-register.md")
+        write_secret(draft, text.rstrip("\n"))
+        p = run("op", "document", "create", str(draft), "--title", REGISTER_ITEM, "--file-name", "pii-register.md")
+    if p.returncode:
+        print(f"          op document create failed: {p.stderr.strip()}")
+        return False
+    return True
+
+
+def write_env_file():
+    return subprocess.run([str(HERE / "restic" / "install.sh")]).returncode in (0, 1) and ENV_FILE.is_file()
+
+
+def password_from_1password():
+    """Write the repository password from the 1Password item, creating the item (with a generated password) if missing."""
+    p = run("op", "item", "get", PASSWORD_ITEM, "--format", "json")
+    if p.returncode:
+        p = run("op", "item", "create", "--category", "Password", "--title", PASSWORD_ITEM,
+                "--generate-password=32,letters,digits", "--format", "json")
+    if p.returncode:
+        print(f"          op item create failed: {p.stderr.strip()}")
+        return False
+    try:
+        value = next(f["value"] for f in json.loads(p.stdout)["fields"] if f.get("purpose") == "PASSWORD")
+    except (ValueError, KeyError, StopIteration):
+        print(f'          no password field in "{PASSWORD_ITEM}"')
+        return False
+    write_secret(PASSWORD_FILE, value)
+    return True
+
+
+def init_backups():
+    return subprocess.run([str(HERE / "restic" / "install.sh"), "--init"]).returncode == 0
+
+
+def repos_ready():
+    flags = [[], ["--store"]] if "store" in MODULES else [[]]
+    return (BIN / "vault-restic").is_file() and all(
+        run(str(BIN / "vault-restic"), *f, "cat", "config").returncode == 0 for f in flags)
+
+
+def main():
+    if sys.argv[1:] not in ([], ["--check"]):
+        sys.exit(f"Usage: {NAME} [--check]")
+    left = 0
+
+    left += not step("git history", (ROOT / ".git").exists(),
+                     ["Every note's undo (Agents/procedures.md, Recover a file from history):",
+                      "git init && git add -A && git commit -m 'New vault'"], git_init)
+
+    if "obsidian" in MODULES:
+        wanted = json.loads((ROOT / ".obsidian" / "community-plugins.json").read_text())
+        missing = [p for p in wanted if not (ROOT / ".obsidian" / "plugins" / p / "main.js").is_file()]
+        left += not step("Obsidian community plugins", not missing,
+                         [f"Missing: {', '.join(missing)}", "python3 .scripts/obsidian-plugins, then reload Obsidian"],
+                         install_plugins)
+
+    if "pii" in MODULES:
+        left += not step("1Password CLI (op)", shutil.which("op") is not None,
+                         ["macOS: brew install --cask 1password-cli; Linux: developer.1password.com/docs/cli/get-started",
+                          "Then, in the 1Password app: Settings > Developer > Integrate with 1Password CLI"])
+        left += not step("1Password CLI signed in", op_ok("whoami"),
+                         ["op signin (or approve the app's prompt the first time op runs)"])
+        left += not step(f'PII register document in 1Password ("{REGISTER_ITEM}")', op_ok("item", "get", REGISTER_ITEM),
+                         ["The one place PII values live; agents never read it (Agents/sensitive-data.md).",
+                          f"Creates a Document item with a heading for {CFG['owner_full'] or CFG['owner']} and an empty table."],
+                         create_register)
+
+    if "backup" in MODULES:
+        left += not step("restic", shutil.which("restic") is not None,
+                         ["macOS: brew install restic; Linux: your package manager, or restic.net"])
+        left += not step(f"backup settings file {short(ENV_FILE)}", ENV_FILE.is_file(),
+                         [".scripts/restic/install.sh writes it with placeholders (mode 600)"], write_env_file)
+        keys = ["VAULT_REPOSITORY"] + (["STORE_REPOSITORY"] if "store" in MODULES else []) + ["B2_ACCOUNT_ID", "B2_ACCOUNT_KEY"]
+        unset = [k for k in keys if not env_has(k)]
+        left += not step(f"Backblaze B2 settings in {ENV_FILE.name}", not unset, [
+            f"Unset: {', '.join(unset)}",
+            f"1. backblaze.com, B2 Cloud Storage: create a private bucket, e.g. {VAULT}-backup.",
+            "2. Application Keys: add a key for that bucket only, Read and Write. The applicationKey shows once:",
+            f'   save keyID and applicationKey in 1Password as "{VAULT} backblaze b2".',
+            "3. In the settings file: B2_ACCOUNT_ID=<keyID>, B2_ACCOUNT_KEY=<applicationKey>,",
+            f"   VAULT_REPOSITORY=b2:<bucket>:vault" + (", STORE_REPOSITORY=b2:<bucket>:store" if "store" in MODULES else ""),
+            "Details: .scripts/restic/README.md, Backblaze B2."])
+        have_op = op_ok("whoami")
+        left += not step(f"repository password {short(PASSWORD_FILE)}, kept in 1Password", PASSWORD_FILE.is_file() and PASSWORD_FILE.stat().st_size > 0,
+                         [f'Reads the Password item "{PASSWORD_ITEM}", creating it with a generated password if missing,'
+                          " and writes the value to the file (mode 600). Without it the backups can't be decrypted."]
+                         if have_op else
+                         [f'Generate a long password, save it in 1Password as "{PASSWORD_ITEM}",',
+                          f"and write it to {short(PASSWORD_FILE)} (mode 600, folder mode 700). Or sign in to op and rerun."],
+                         password_from_1password if have_op else None)
+        left += not step("restic repositories and nightly jobs", repos_ready(),
+                         [".scripts/restic/install.sh --init creates the repositories in B2 and schedules the jobs"],
+                         init_backups)
+
+    print("done" if not left else f"{left} step{'s' if left > 1 else ''} left; rerun when ready")
+    sys.exit(1 if left else 0)
+
+
+if __name__ == "__main__":
+    main()
