@@ -9,15 +9,6 @@
       "key": "N"
     }
   ],
-  "obsidian-tasks-plugin:edit-task": [
-    {
-      "modifiers": [
-        "Mod",
-        "Shift"
-      ],
-      "key": "R"
-    }
-  ],
   "editor:toggle-source": [
     {
       "modifiers": [
@@ -43,15 +34,6 @@
         "Shift"
       ],
       "key": "M"
-    }
-  ],
-  "nldates-obsidian:nlp-today": [
-    {
-      "modifiers": [
-        "Mod",
-        "Shift"
-      ],
-      "key": "J"
     }
   ],
   "quickadd:runQuickAdd": [
