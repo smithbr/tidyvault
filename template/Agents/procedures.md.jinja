@@ -73,7 +73,7 @@ Paths live outside the vault's content, in files Obsidian's own rename never tou
 1. Sweep every file, dot-folders included, for the old path:
 
    ```bash
-   grep -rnI "old/path" . --exclude-dir=.git --exclude-dir=.smart-env --exclude-dir=_tmp --exclude=main.js --exclude='workspace*.json'
+   grep -rnI "old/path" . --exclude-dir=.git --exclude-dir=_tmp --exclude=main.js --exclude='workspace*.json'
    ```
 
 2. Update each hit. The usual places:
