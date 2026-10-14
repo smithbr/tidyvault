@@ -10,6 +10,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # update-check clones the checkout; git can't clone from a shallow repo
       - uses: astral-sh/setup-uv@v5
       - run: uv tool install copier
       - name: kit-check with the private leak words
@@ -24,6 +26,8 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # update-check clones the checkout; git can't clone from a shallow repo
       - uses: astral-sh/setup-uv@v5
       - run: uv tool install copier
       - run: tests/kit-check
