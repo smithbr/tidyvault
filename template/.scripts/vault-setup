@@ -3,9 +3,10 @@
 
   python3 .scripts/vault-setup            check every step; offer to do the ones it can
   python3 .scripts/vault-setup --check    report only, no prompts (exit 1 while anything is left)
+  python3 .scripts/vault-setup --new      as after copier copy: the local steps (plugins, git) without asking
 
-Steps, by module (read from .tidyvault.yml): git history; the Obsidian community
-plugins (obsidian); the 1Password CLI, signed in, and the PII register document
+Steps, by module (read from .tidyvault.yml): the Obsidian community plugins
+(obsidian); git history; the 1Password CLI, signed in, and the PII register document
 (pii); restic, the Backblaze B2 settings, the repository password kept in
 1Password, then the repositories and the nightly jobs (backup). Safe to rerun
 until every line says ok. Prints keys, titles and paths, never a secret.
@@ -51,6 +52,7 @@ REGISTER_ITEM = os.environ.get("PII_REGISTER_ITEM", f"{VAULT} PII register")
 PASSWORD_ITEM = f"{VAULT} restic repository"
 REGISTER_HEADER = "| Key | Category | Value | Where used | Notes |\n|---|---|---|---|---|\n"
 ASK = "--check" not in sys.argv[1:]
+NEW = "--new" in sys.argv[1:]
 
 
 def run(*cmd, **kw):
@@ -62,14 +64,21 @@ def short(path):
     return "~" + str(path)[len(str(HOME)):] if str(path).startswith(str(HOME)) else str(path)
 
 
-def step(label, done, hints=(), action=None):
-    """Print one checklist line; offer `action` (a callable returning True when done) for a todo."""
+def step(label, done, hints=(), action=None, local=False):
+    """Print one checklist line; offer `action` (a callable returning True when done) for a todo.
+
+    A local step (it only touches the vault folder) runs without asking under --new."""
     if done:
         print(f"ok        {label}")
         return True
     print(f"todo      {label}")
     for h in hints:
         print(f"          {h}")
+    if action and NEW and local:
+        if action():
+            print(f"ok        {label}")
+            return True
+        return False
     if action and ASK:
         try:
             answer = input("          Do it now? [y/N] ").strip().lower()
@@ -163,20 +172,21 @@ def repos_ready():
 
 
 def main():
-    if sys.argv[1:] not in ([], ["--check"]):
-        sys.exit(f"Usage: {NAME} [--check]")
+    if sys.argv[1:] not in ([], ["--check"], ["--new"]):
+        sys.exit(f"Usage: {NAME} [--check | --new]")
     left = 0
-
-    left += not step("git history", (ROOT / ".git").exists(),
-                     ["Every note's undo (Agents/procedures.md, Recover a file from history):",
-                      "git init && git add -A && git commit -m 'New vault'"], git_init)
 
     if "obsidian" in MODULES:
         wanted = json.loads((ROOT / ".obsidian" / "community-plugins.json").read_text())
         missing = [p for p in wanted if not (ROOT / ".obsidian" / "plugins" / p / "main.js").is_file()]
         left += not step("Obsidian community plugins", not missing,
-                         [f"Missing: {', '.join(missing)}", "python3 .scripts/obsidian-plugins, then reload Obsidian"],
-                         install_plugins)
+                         [f"Missing: {', '.join(missing)}", "python3 .scripts/obsidian-plugins. If Obsidian is open: Settings > Community plugins > Turn on, then reload"],
+                         install_plugins, local=True)
+
+    # After the plugins, so the first commit has them.
+    left += not step("git history", (ROOT / ".git").exists(),
+                     ["Every note's undo (Agents/procedures.md, Recover a file from history):",
+                      "git init && git add -A && git commit -m 'New vault'"], git_init, local=True)
 
     if "pii" in MODULES:
         left += not step("1Password CLI (op)", shutil.which("op") is not None,

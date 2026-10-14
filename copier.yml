@@ -1,7 +1,8 @@
 # tidyvault: Copier template for an Obsidian PARA/GTD vault run by agents.
-# New vault:  copier copy gh:smithbr/tidyvault <path>
-# Update:     copier update   (from the vault root)
-_min_copier_version: "9.4"
+# New vault:  copier copy --trust gh:smithbr/tidyvault <path>
+# Update:     copier update --trust   (from the vault root)
+# --trust lets Copier run _tasks (the first-time setup); updates need it once a vault came from a kit with tasks.
+_min_copier_version: "9.6"  # _copier_operation, for the copy-only setup task
 _subdirectory: template
 _answers_file: .copier-answers.yml
 _templates_suffix: .jinja
@@ -100,11 +101,13 @@ backup:
 _message_before_copy: |
   A few questions about you and the vault, then five optional parts. Enter accepts the suggested answer.
 
+# A new vault sets itself up: plugins and git without asking, then a prompt per remaining step.
+# Never fails the copy (Copier would delete the new folder); vault-setup reruns finish what's left.
+_tasks:
+  - command: python3 .scripts/vault-setup --new || true
+    when: "[[= _copier_operation == 'copy' =]]"
+
 _message_after_copy: |
-  Vault rendered. Next, from the vault folder:
-  [[% if obsidian %]]
-    - Open it in Obsidian, then: python3 .scripts/obsidian-plugins
-  [[% endif %]]
-    - python3 .scripts/vault-setup
-      A walkthrough of what is left: git history[[% if pii %]], the 1Password CLI and the PII register document[[% endif %]][[% if backup %]], restic backups to Backblaze B2 with the password kept in 1Password[[% endif %]].
-      It offers to do each step it can; rerun it until every line says ok.
+  Vault ready.[[% if obsidian %]] Open the folder in Obsidian and choose "Trust author and enable plugins".[[% endif %]]
+
+  Rerun python3 .scripts/vault-setup from the vault folder until every line says ok.

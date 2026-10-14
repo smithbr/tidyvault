@@ -110,7 +110,7 @@ Brings in a new tidyvault version: the manual, `vault-lint`, roles, templates, `
 
 1. `git status` is clean (Copier refuses a dirty tree): let the git plugin's backup commit land, or commit the pending changes as [[= owner =]] ([[agent-protocol#Editing .obsidian and .git]]).
 2. Baseline lint. Note the version in `.copier-answers.yml` (`_commit`).
-3. From the vault root: `copier update` (a named version: `--vcs-ref <tag>`). Copier re-renders the kit files and merges any hand edit with the new version; seeds (`Home.md`, `People/`, `Areas/`, `Resources/`, `.obsidian/`, [[changelog]][[%+ if pii +%]], [[pii-allowlist]][[%+ endif +%]], `Agents/local/`) are left alone.
+3. From the vault root: `copier update --trust` (a named version: `--vcs-ref <tag>`). Copier re-renders the kit files and merges any hand edit with the new version; seeds (`Home.md`, `People/`, `Areas/`, `Resources/`, `.obsidian/`, [[changelog]][[%+ if pii +%]], [[pii-allowlist]][[%+ endif +%]], `Agents/local/`) are left alone.
 4. Resolve conflicts: `grep -rln '^<<<<<<< ' . --exclude-dir=.git`, and any `*.rej` files. Keep the kit's text; move anything vault-specific into [[local-rules]].
 5. Review `git diff --stat`; lint, with no new errors. Run `python3 .scripts/tests/run.py`.
 6. Add a dated line to [[changelog]]: the old and new version, and any local edit moved to [[local-rules]]. Report the pages that changed.

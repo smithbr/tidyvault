@@ -15,12 +15,12 @@ Point Claude Code, Codex, or Cursor at a plain vault and it misfiles notes, inve
 ## Try it
 
 ```bash
-uvx copier copy gh:smithbr/tidyvault my-vault
+uvx copier copy --trust gh:smithbr/tidyvault my-vault
 ```
 
-1. Answer the questions (defaults are fine) and open `my-vault` in Obsidian.
-2. Install the plugins it asks for.
-3. Run `python3 .scripts/vault-setup`. It checks each setup step, offers to do the ones it can, and says what's left; rerun it until every line says ok.
+1. Answer the questions (defaults are fine). Copier then sets the vault up: it installs the Obsidian plugins and makes the first git commit, then offers the 1Password and backup steps. `--trust` is what lets it run that setup.
+2. Open `my-vault` in Obsidian and choose "Trust author and enable plugins".
+3. Anything left (1Password, backups): rerun `python3 .scripts/vault-setup` from `my-vault` until every line says ok.
 4. In Claude Code, from that folder: `/vault-pm`, then "what now?".
 
 Needs git, Python 3.12+, and [uv](https://docs.astral.sh/uv/); 1Password and Backblaze B2 are the only password manager and backup target supported so far. Any agent that reads `AGENTS.md` works; the `/vault-*` commands are Claude Code extras.
@@ -32,7 +32,7 @@ Needs git, Python 3.12+, and [uv](https://docs.astral.sh/uv/); 1Password and Bac
 - **Six roles.** intake, pm, docs, ask, ops, admin. Each may write only what its page allows.
 - **A linter that fixes.** 26 checks (links, fields, tasks with no home, projects with no next step, personal data); `--fix` repairs the safe ones.
 - **A log.** Every agent run is recorded. Every question for you lands on the dashboard, not in a chat.
-- **Updates.** `copier update` brings new rules and checks without touching your notes or your own rules in `Agents/local/`.
+- **Updates.** `copier update --trust` brings new rules and checks without touching your notes or your own rules in `Agents/local/`.
 - **Guided setup.** `vault-setup` checks every step below, offers to do the ones it can, and tells you exactly what's left.
 - **Git history.** Every version of every note, so any change can be undone. Setup makes the first commit; the Git plugin commits every 15 minutes after that.
 - **Personal data in 1Password.** Account numbers, IDs, and addresses live in one 1Password document, the PII register, which no agent can read. Notes hold a key in their place, and the linter catches a value that slips through. Setup checks the [1Password CLI](https://developer.1password.com/docs/cli/) and creates the register. Optional, on by default.

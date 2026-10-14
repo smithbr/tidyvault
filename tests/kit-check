@@ -12,7 +12,7 @@ fail=0
 render() {  # render NAME [copier -d answers...]
   local name="${1}"; shift
   # --vcs-ref HEAD: test the checkout as it is, not the latest tag (Copier's default for a git source)
-  copier copy --defaults --quiet --vcs-ref HEAD -d owner=Robin -d "owner_full=Robin Vale" -d "vault=${name}" "$@" \
+  copier copy --defaults --quiet --skip-tasks --vcs-ref HEAD -d owner=Robin -d "owner_full=Robin Vale" -d "vault=${name}" "$@" \
     "${kit}" "${out}/${name}" 2>/dev/null
 }
 render full -d backup=true

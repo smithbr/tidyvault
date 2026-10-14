@@ -29,7 +29,7 @@ answers=(-d owner=Robin -d "owner_full=Robin Vale" -d vault=uc -d backup=true)
 
 # ---- 1. copier update ----------------------------------------------------------------
 v="${work}/v"
-copier copy --defaults --quiet "${answers[@]}" "${work}/kit" "${v}"
+copier copy --defaults --quiet --skip-tasks "${answers[@]}" "${work}/kit" "${v}"
 git_ "${v}" init -q && git_ "${v}" add -A && git_ "${v}" commit -qm base
 # the vault's own content, a seed edit, a local rule, and a local edit to a kit page
 cat > "${v}/Tasks/water-the-plants.md" <<'EOF'
@@ -49,7 +49,7 @@ git_ "${v}" add -A && git_ "${v}" commit -qm "vault content"
 # the kit moves on: a new line in one page, a new rule in strict-rules
 printf '\n- **Kit line added for update-check.**\n' >> "${work}/kit/template/Agents/naming-and-style.md.jinja"
 git_ "${work}/kit" add -A && git_ "${work}/kit" commit -qm "kit change" && git_ "${work}/kit" tag v9.0.1 >/dev/null
-( cd "${v}" && copier update --defaults --quiet )
+( cd "${v}" && copier update --defaults --quiet --trust --skip-tasks )
 check "update: kit change arrived"            "grep -q 'Kit line added for update-check' '${v}/Agents/naming-and-style.md'"
 check "update: local edit to a kit page kept"  "grep -q 'A local edit at the end of gtd' '${v}/Agents/gtd.md'"
 check "update: vault content untouched"        "grep -q 'Water the plants' '${v}/Tasks/water-the-plants.md'"
@@ -69,7 +69,7 @@ printf -- '---\ntitle: Kitchen quote\ntype: document\ndate: 2026-09-01\n---\n# K
 printf -- '---\ntitle: "Role: vault ops (local)"\ntype: manual\n---\n# Role: vault ops (local)\n\nPart of the [[README]]. Modes this vault adds to [[role-vault-ops]].\n' > "${e}/Agents/local/roles/role-vault-ops-local.md"
 printf 'custom-ignore/\n' > "${e}/.gitignore"
 git_ "${e}" init -q && git_ "${e}" add -A && git_ "${e}" commit -qm "existing vault"
-( cd "${e}" && copier copy --defaults --quiet -w --vcs-ref v9.0.1 "${answers[@]}" "${work}/kit" . )
+( cd "${e}" && copier copy --defaults --quiet --skip-tasks -w --vcs-ref v9.0.1 "${answers[@]}" "${work}/kit" . )
 check "adopt: existing task kept"              "grep -q 'Water the plants' '${e}/Tasks/water-the-plants.md'"
 check "adopt: existing Person kept (seed)"     "grep -q 'Lives in Lisbon' '${e}/People/priya-nair.md'"
 check "adopt: existing Resource kept (seed)"   "grep -q 'The quote' '${e}/Resources/kitchen-quote.md'"
