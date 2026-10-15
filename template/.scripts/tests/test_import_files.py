@@ -41,13 +41,13 @@ class ImportFiles(unittest.TestCase):
         (self.root / "_imports/sub").mkdir()
         (self.root / "_imports/sub/a.pdf").write_bytes(b"pdf")
         (self.root / "_imports/.hidden").write_bytes(b"h")
-        (self.root / "_captures/n.md").write_text("x `$=dv.current()` y\n```dataviewjs\n1\n```\n")
+        (self.root / "_captures/n.md").write_text("x `$=dv.current()` y\n```dataviewjs\n1\n```\n<% x %>\n")
         out = self.run_cmd("inventory").stdout
         self.assertIn("_imports/sub/a.pdf", out)
         self.assertIn("_imports/.hidden", out)
         self.assertNotIn(".gitkeep", out)
         self.assertIn("note", out)
-        self.assertIn("CODE: dataviewjs,inline-$=", out)
+        self.assertIn("CODE: dataviewjs,inline-$=,templater", out)
 
     def test_inventory_duplicate_and_empty(self):
         self.assertIn("empty", self.run_cmd("inventory").stdout)
@@ -113,11 +113,12 @@ class ImportFiles(unittest.TestCase):
 
     def test_fence_fix(self):
         p = self.root / "_captures/n.md"
-        p.write_text("a `$=1+1` b\n```dataviewjs\ncode\n```\n")
+        p.write_text("a `$=1+1` b\n```dataviewjs\ncode\n```\n<%* tR = 1 %> and <% x %>\n")
         out = self.run_cmd("fence-fix", "_captures/n.md").stdout
-        self.assertEqual(p.read_text(), "a $=1+1 b\n```text\ncode\n```\n")
+        self.assertEqual(p.read_text(), "a $=1+1 b\n```text\ncode\n```\n&lt;%* tR = 1 %> and &lt;% x %>\n")
         self.assertIn("fence", out)
         self.assertIn("inline", out)
+        self.assertIn("templater: 2", out)
         self.assertIn("nothing", self.run_cmd("fence-fix", "_captures/n.md").stdout)
 
     def test_manifest_lint_passes(self):

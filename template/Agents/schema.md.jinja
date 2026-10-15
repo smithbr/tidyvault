@@ -125,7 +125,7 @@ Keeps the file's original fields from its old folder (only that folder's fields)
 
 ## Agents/
 
-`title`, `type: manual`, role pages (`Agents/roles/role-*.md`) included. Templates (`Agents/templates/template-*.md`) use `type: template`; their body is Templater source and is exempt from body checks.
+`title`, `type: manual`, role pages (`Agents/roles/role-*.md`) included. Templates (`Agents/templates/template-*.md`) use `type: template`; their body is Templater source and is exempt from body checks, except `templater`, which allows only the kit's own Templater commands.
 
 Run logs (`Agents/logs/log-*.md`) use `title`, `type: log`, `date` (**required**, the day of the run), and `sensitive` when true, in that order. Rules in [[agent-protocol]] (Run log).
 

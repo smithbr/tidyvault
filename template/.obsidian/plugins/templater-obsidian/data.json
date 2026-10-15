@@ -36,5 +36,21 @@
   "enabled_templates_hotkeys": [],
   "startup_templates": [],
   "intellisense_render": "1",
-  "ignore_folders_on_creation": []
+  "ignore_folders_on_creation": [
+    {
+      "folder": "_imports"
+    },
+    {
+      "folder": "_captures"
+    },
+    {
+      "folder": "_attachments"
+    },
+    {
+      "folder": "_files"
+    },
+    {
+      "folder": "_tmp"
+    }
+  ]
 }

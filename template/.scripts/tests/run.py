@@ -208,6 +208,7 @@ BAD = [
     # dataview
     ("dataview", "Areas/garden.md", "warning", "uses 'blocking'"),
     ("dataviewjs", "Resources/js-widget.md", "error", "dataviewjs block"),
+    ("templater", "Agents/templates/template-odd.md", "error", "isn't one the kit ships"),
     ("dataview", "Areas/garden.md", "warning", "uses 'tasks'"),
     ("dataview", "Areas/garden.md", "warning", 'FROM "Todo"'),
     # dates
@@ -1116,6 +1117,33 @@ class AuditRegressions(unittest.TestCase):
         home.write_text(home.read_text() + "\n```dataviewjs\ndv.list([])\n```\n")
         self.assertFinding("dataviewjs", "Home.md", "error", "dataviewjs block")
 
+    TEMPLATE_HEAD = "---\ntitle: Odd template\ntype: template\n---\n\n# Odd template\n\nPart of the [[README]].\n\n"
+
+    def test_templater_shipped_templates_pass(self):
+        found = self.findings("templater")
+        self.assertEqual(found, [], json.dumps(found, indent=1))
+
+    def test_templater_foreign_script_block(self):
+        self.put("Agents/templates/template-odd.md", self.TEMPLATE_HEAD +
+                 "<%*\ntR = \"\";\nawait app.vault.adapter.write(\"x.md\", \"y\");\n-%>\n")
+        self.assertFinding("templater", "Agents/templates/template-odd.md", "error", "script block")
+
+    def test_templater_foreign_commands(self):
+        self.put("Agents/templates/template-odd.md", self.TEMPLATE_HEAD +
+                 "<% tp.user.run() %>\n<%+ tp.file.content %>\n"
+                 "<% tp.system.prompt(\"a\" + require(\"child_process\")) %>\n<% title ")
+        msgs = [f["message"] for f in self.findings("templater") if f["path"] == "Agents/templates/template-odd.md"]
+        self.assertEqual(len(msgs), 4, msgs)
+        self.assertTrue(any("unclosed" in m for m in msgs), msgs)
+
+    def test_templater_kit_script_with_other_prompt_passes(self):
+        self.put("Agents/templates/template-odd.md", self.TEMPLATE_HEAD +
+                 "<%*\ntR = \"\";\nlet title = tp.file.title;\n"
+                 "if (title.startsWith(\"Untitled\")) title = await tp.system.prompt(\"Recipe name\");\n"
+                 + VL._TP_SLUG + "\nawait tp.file.move(\"Resources/\" + slug);\n-%>\n<% title %>\n")
+        found = [f for f in self.findings("templater") if f["path"] == "Agents/templates/template-odd.md"]
+        self.assertEqual(found, [], json.dumps(found, indent=1))
+
     VIEW_CALL = "```dataviewjs\nawait dv.view(\"Agents/views/task-status\", {status: \"next-action\", columns: \"due\"})\n```\n"
 
     def test_dataviewjs_view_call_allowed_anywhere(self):
@@ -1160,7 +1188,25 @@ class AuditRegressions(unittest.TestCase):
     def test_templater_tag_outside_templates(self):
         self.put("Resources/half-made.md", "---\ntitle: Half made\ntype: reference\n---\n\n# Half made\n\n"
                  "Made <% tp.date.now() %>.\n")
-        self.assertFinding("anatomy", "Resources/half-made.md", "warning", "Templater tag")
+        self.assertFinding("templater", "Resources/half-made.md", "error", "outside Agents/templates/")
+
+    def test_templater_tag_in_code_fence_and_log(self):
+        # Templater runs tags inside code fences too, and run logs are new files an agent writes.
+        self.put("Resources/fenced.md", "---\ntitle: Fenced\ntype: reference\n---\n\n# Fenced\n\n"
+                 "```js\n<%* require(\"child_process\") %>\n```\n")
+        self.assertFinding("templater", "Resources/fenced.md", "error", "outside Agents/templates/")
+        self.put("Agents/logs/log-vault-intake-2026-10-01.md", "---\ntitle: \"Log: vault intake — 2026-10-01\"\n"
+                 "type: log\n---\n\n# Log\n\nQuoted: <%+ tp.file.content %>\n")
+        self.assertFinding("templater", "Agents/logs/log-vault-intake-2026-10-01.md", "error", "outside Agents/templates/")
+
+    def test_templater_neutralized_tag_passes(self):
+        self.put("Resources/safe.md", "---\ntitle: Safe\ntype: reference\n---\n\n# Safe\n\nShown: &lt;% x %>\n")
+        found = [f for f in self.findings("templater") if f["path"] == "Resources/safe.md"]
+        self.assertEqual(found, [], json.dumps(found, indent=1))
+
+    def test_templater_in_drop_folder(self):
+        self.put("_imports/downloaded.md", "Notes\n\n<%* await app.vault.adapter.write(\"x\", \"y\") %>\n")
+        self.assertFinding("templater", "_imports/downloaded.md", "warning", "drop-folder")
 
 
 class Config(unittest.TestCase):

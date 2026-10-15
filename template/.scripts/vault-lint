@@ -43,7 +43,7 @@ USAGE
 CHECKS (stable ids; --list-checks describes them)
     structure, file-format, frontmatter-present, frontmatter-syntax, filename,
     unique-names, title, schema, links, relations, waiting-on, tasks, projects, archive,
-    attachments, manifest, anatomy, dataview, dataviewjs, dates, sensitive, format, orphans, facts, source-urls
+    attachments, manifest, anatomy, dataview, dataviewjs, templater, dates, sensitive, format, orphans, facts, source-urls
 
 CONFIG (.tidyvault.yml at the vault root, written by Copier)
     owner, owner_full, owner_slug, vault, store_path, store_image, and the
@@ -1689,7 +1689,6 @@ REQUIRED_SECTIONS = {
     "Projects": ["Tasks"],
     "Areas": ["Projects", "Tasks"],
 }
-TEMPLATER_TAG = re.compile(r"<%[-_*+]?\s.*?%>|<%\*")  # Agents/procedures.md: only Agents/templates/ notes hold them
 REVISIT = re.compile(r"\(revisit ([^)]*)\)")
 # Pictographic emoji only; dingbats like ✓ → ★ are not flagged in body text.
 _BODY_EMOJI = re.compile("[\U0001F000-\U0001FAFF]|[\U00002190-\U00002BFF]\U0000FE0F")
@@ -1806,10 +1805,6 @@ def check_anatomy(v: Vault) -> Iterator[Finding]:
                     if not parse_date(m.group(1).strip()):
                         yield Finding("anatomy", WARNING, n.rel, ln0 + 1 + i,
                                       f"'(revisit {m.group(1)})' needs an ISO date: (revisit YYYY-MM-DD)")
-        tag = next((i + 1 for i, line in enumerate(n.text.split("\n")) if TEMPLATER_TAG.search(line)), None)
-        if tag:
-            yield Finding("anatomy", WARNING, n.rel, tag,
-                          "Templater tag outside Agents/templates/; replace it with its value")
         for ln, line in body_lines_outside_code(n):
             # Emoji are fine in body text; only section headings stay plain (heading links match them exactly).
             if HEADING_EMOJI_LINE.match(line) and _BODY_EMOJI.search(line):
@@ -1916,6 +1911,22 @@ def check_dataview(v: Vault) -> Iterator[Finding]:
             i = j + 1
 
 
+def drop_notes(v: Vault) -> Iterator[tuple]:
+    """Yield (rel, text) for each .md waiting in _imports/ and _captures/, which the vault index skips."""
+    for top in (IMPORTS_DIR, CAPTURES_DIR):
+        for dirpath, dirnames, filenames in os.walk(v.root / top):
+            dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+            for fn in sorted(filenames):
+                if not fn.lower().endswith(".md"):
+                    continue
+                path = Path(dirpath) / fn
+                try:
+                    text = path.read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    continue
+                yield path.relative_to(v.root).as_posix(), text
+
+
 @check("dataviewjs", "DataviewJS runs code when a note opens: a note may hold only one-line calls to a view in Agents/views/, Home.md included; drop folders are scanned too")
 def check_dataviewjs(v: Vault) -> Iterator[Finding]:
     def hits(text, allow_view=False):
@@ -1932,21 +1943,83 @@ def check_dataviewjs(v: Vault) -> Iterator[Finding]:
                           f"{what}: DataviewJS may only be a one-line Agents/views/<name> call "
                           f"(Agents/body-sections.md); use a DQL 'dataview' block, or fence it as text")
     # Notes waiting in the drop folders aren't indexed, but Obsidian runs their code if they're opened.
-    for top in (IMPORTS_DIR, CAPTURES_DIR):
-        for dirpath, dirnames, filenames in os.walk(v.root / top):
-            dirnames[:] = [d for d in dirnames if not d.startswith(".")]
-            for fn in sorted(filenames):
-                if not fn.lower().endswith(".md"):
-                    continue
-                path = Path(dirpath) / fn
-                try:
-                    text = path.read_text(encoding="utf-8", errors="replace")
-                except OSError:
-                    continue
-                rel = path.relative_to(v.root).as_posix()
-                for ln, what in hits(text):
-                    yield Finding("dataviewjs", WARNING, rel, ln,
-                                  f"{what} in a drop-folder note: don't open it in Obsidian; the importer fences it as text before filing")
+    for rel, text in drop_notes(v):
+        for ln, what in hits(text):
+            yield Finding("dataviewjs", WARNING, rel, ln,
+                          f"{what} in a drop-folder note: don't open it in Obsidian; the importer fences it as text before filing")
+
+
+# ---- Templater -------------------------------------------------------------
+
+# Obsidian runs a template's Templater code whenever a new note is made from it, so templates
+# may hold only the kit's own commands: an expression from TEMPLATER_EXPR, or a script block
+# whose lines match one of TEMPLATER_SCRIPTS once its prompt text and folder are set aside.
+TEMPLATER_ANY = re.compile(r"<%([-_]?)([*+]?)([-_]?)(.*?)[-_]?%>", re.S)
+TEMPLATER_EXPR = re.compile(r'^(?:title|tp\.file\.title|tp\.file\.cursor\(\d*\)'
+                            r'|tp\.date\.now\("[^"\\\n]*"\)|tp\.system\.prompt\("[^"\\\n]*"\))$')
+_TP_PROMPT = re.compile(r'tp\.system\.prompt\("[^"\\\n]*"\)')
+_TP_MOVE = re.compile(r'tp\.file\.move\("(?:Tasks|Projects|Areas|Resources|People|Agents/logs)/" \+ slug\)')
+_TP_SLUG = (r'const slug = title.normalize("NFKD").replace(/[^\x00-\x7F]/g, "").toLowerCase()'
+            r""".replace(/'/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");""")
+TEMPLATER_SCRIPTS = {
+    ('tR = "";',),
+    ('tR = "";', 'let title = tp.file.title;',
+     'if (title.startsWith("Untitled")) title = await tp.system.prompt(PROMPT);',
+     _TP_SLUG, 'await tp.file.move(FOLDER + slug);'),
+    ('tR = "";', 'let title = tp.file.title;',
+     'if (title.startsWith("Untitled")) title = "Log: " + (await tp.system.prompt(PROMPT)) + " — " + tp.date.now("YYYY-MM-DD");',
+     _TP_SLUG, 'await tp.file.move(FOLDER + slug);'),
+}
+
+
+def templater_problems(text: str) -> Iterator[tuple]:
+    """Yield (line, message) for each Templater tag the kit doesn't ship."""
+    for m in TEMPLATER_ANY.finditer(text):
+        ln = text.count("\n", 0, m.start()) + 1
+        kind, code = m.group(2), m.group(4)
+        if kind == "+":
+            yield ln, "dynamic Templater command (<%+)"
+        elif kind == "*":
+            lines = tuple(l.strip() for l in code.split("\n") if l.strip())
+            lines = tuple(_TP_MOVE.sub("tp.file.move(FOLDER + slug)", _TP_PROMPT.sub("tp.system.prompt(PROMPT)", l))
+                          for l in lines)
+            if lines not in TEMPLATER_SCRIPTS:
+                yield ln, "Templater script block isn't one the kit ships"
+        elif not TEMPLATER_EXPR.match(code.strip()):
+            yield ln, f"Templater command '{code.strip()[:40]}' isn't one the kit ships"
+    closed = {m.start() for m in TEMPLATER_ANY.finditer(text)}
+    for m in re.finditer(r"<%", text):
+        if m.start() not in closed:
+            yield text.count("\n", 0, m.start()) + 1, "unclosed Templater tag"
+
+
+@check("templater", "Templater tags appear only in Agents/templates/, as the kit's own commands: Obsidian runs them when a note is made from a template, and any tag in a new non-empty file; drop folders are scanned too")
+def check_templater(v: Vault) -> Iterator[Finding]:
+    for n in v.notes.values():
+        if n.is_template:
+            for ln, what in templater_problems(n.text):
+                yield Finding("templater", ERROR, n.rel, ln,
+                              f"{what}; templates may hold only title, tp.file.title, tp.file.cursor, tp.date.now, "
+                              f"tp.system.prompt, and the kit's title-and-move script (Agents/procedures.md)")
+            continue
+        # Templater also runs every tag in a new file that isn't empty (Sync, git, an agent's write),
+        # code fences included, so no other note may hold one.
+        for ln in templater_tag_lines(n.text):
+            yield Finding("templater", ERROR, n.rel, ln,
+                          "Templater tag outside Agents/templates/: Obsidian runs it when the file appears; "
+                          "replace it with its value, or neutralize it with import-files fence-fix")
+    for rel, text in drop_notes(v):
+        for ln in templater_tag_lines(text):
+            yield Finding("templater", WARNING, rel, ln,
+                          "Templater tag in a drop-folder note: don't open it in Obsidian; "
+                          "the importer neutralizes it (import-files fence-fix) before filing")
+
+
+def templater_tag_lines(text: str) -> Iterator[int]:
+    """Line numbers holding '<%', the start of any Templater tag."""
+    for i, line in enumerate(text.split("\n")):
+        if "<%" in line:
+            yield i + 1
 
 
 # ---- dates -----------------------------------------------------------------

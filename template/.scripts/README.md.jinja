@@ -52,7 +52,7 @@ A whole-vault run takes about 0.2 s.
 Checks, in output order: `structure`, `file-format`, `frontmatter-present`,
 `frontmatter-syntax`, `filename`, `unique-names`, `title`, `schema`, `links`,
 `relations`, `waiting-on`, `tasks`, `projects`, `archive`, `attachments`, `manifest`, `anatomy`,
-`dataview`, `dataviewjs`, `dates`, `pii`, `sensitive`, `format`, `orphans`, `facts`, `source-urls`. A check whose module is off in `.tidyvault.yml` is skipped (`--list-checks` says which).
+`dataview`, `dataviewjs`, `templater`, `dates`, `pii`, `sensitive`, `format`, `orphans`, `facts`, `source-urls`. A check whose module is off in `.tidyvault.yml` is skipped (`--list-checks` says which).
 
 `--fix` only does rewrites that can't change meaning: key order, quoting bare
 wikilinks, inline → block lists, list indent, unquoting ISO dates, deleting
@@ -85,7 +85,7 @@ reported (`file-format` error); BOM and CRLF are reported and handled; symlinks
 are reported and never followed (they still resolve as link targets); notes over
 2 MB are reported and skipped by content checks.
 
-Exempt: `Agents/templates/` note bodies (Templater source) and the root files
+Exempt: `Agents/templates/` note bodies (Templater source; only the `templater` check reads them) and the root files
 `AGENTS.md` and `llms.txt` (not vault notes; they still count
 for `unique-names`). Project rules follow the state machine in `Agents/gtd.md`.
 
@@ -193,7 +193,7 @@ Which checks enforce each rule; the rule text lives in `Agents/strict-rules.md`,
 | organization.md | `attachments`, `manifest` |
 | linking.md | `links`, `unique-names`, `frontmatter-syntax`, `relations`, `facts` |
 | naming-and-style.md | `title`, `filename`, `projects`, `anatomy`, `schema` |
-| procedures.md | `anatomy` |
+| procedures.md | `anatomy`, `templater` |
 [[% if pii %]]
 | sensitive-data.md | `pii`, `sensitive`, `relations`, `waiting-on` |
 [[% endif %]]

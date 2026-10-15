@@ -111,6 +111,6 @@ _tasks:
     when: "[[= _copier_operation == 'copy' =]]"
 
 _message_after_copy: |
-  Vault ready.[[% if obsidian %]] Open the folder in Obsidian and choose "Trust author and enable plugins".[[% endif %]]
+  Vault ready.[[% if obsidian %]] Open the folder in Obsidian and choose "Trust author and enable plugins", then turn on Settings > Templater > Trigger Templater on new file creation (once on each device).[[% endif %]]
 
-  Rerun python3 .scripts/vault-setup from the vault folder until every line says ok.
+  Rerun python3 .scripts/vault-setup from the vault folder until it prints "done".
