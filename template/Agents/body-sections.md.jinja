@@ -11,7 +11,7 @@ Part of the [[README]]. Body sections per type and the Dataview blocks that repl
 1. Frontmatter on line 1, keys in [[schema]] order.
 2. `# Title` on the line right after the closing `---` (no blank line, so Obsidian opens on the title), exactly matching `title`.
 3. Body sections as below, `##` level. Omit a section that would be empty, except where marked required. Add a missing section in the position shown when you first need it.
-4. Views are Dataview DQL blocks copied from this page, plus `dataviewjs` blocks that are exactly one call to a vault view, `await dv.view("Agents/views/<name>", {…})` with string options, such as the [[#Task status view]]. Write no other `dataviewjs` blocks outside `Home.md`.
+4. Views are Dataview DQL blocks copied from this page, plus `dataviewjs` blocks that are exactly one call to a vault view, `await dv.view("Agents/views/<name>", {…})` with string options, such as the [[#Task status view]]. Write no other `dataviewjs` blocks anywhere, `Home.md` included: new code for a view goes in `Agents/views/<name>/view.js`, which only [[= owner =]] approves.
 
 ## Task
 

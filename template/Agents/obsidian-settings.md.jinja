@@ -47,7 +47,7 @@ The kit ships these plugins' settings (`data.json`); `.scripts/obsidian-plugins`
 
 | Plugin | Role here | Other settings that matter |
 |---|---|---|
-| Dataview | Renders the views in `Home.md` and in Projects, Areas, and People ([[body-sections]]). Views only; facts live in frontmatter. | DQL on; JavaScript queries on, for the task status view and Home only ([[body-sections]], Task status view); inline JavaScript queries off. |
+| Dataview | Renders the views in `Home.md` and in Projects, Areas, and People ([[body-sections]]). Views only; facts live in frontmatter. | DQL on; JavaScript queries on, for one-line calls to the vault's own views, such as the task status view ([[body-sections]], Task status view); inline JavaScript queries off. |
 | Templater | Fills new files from `Agents/templates/` and renames them to their slug. | Trigger on new file creation, folder mode. Fires only on files created empty, so Sync arrivals, git restores, and agent-written files are untouched. |
 | Obsidian Git | Commits, pulls, and pushes on a timer: the main safety net ([[external-systems]]). One machine only. | Merge on sync. |
 | Linter | Formats spacing and markup on save; `vault-lint --fix` applies the same rules ([[#Linter rules]]). | — |
@@ -71,7 +71,7 @@ The shipped `.obsidian/` matches every row. When [[= owner =]] changes one, reco
 | QuickAdd → "Capture to inbox" | A Template choice: template `Agents/templates/template-capture.md`, file name `capture-{{DATE:YYYY-MM-DD-HHmmss}}`, folder `_captures`; open the new file. Templater: auto jump to cursor on | As shipped | A capture is a free-form scratch note; intake files it ([[role-vault-intake]]). |
 | Appearance → Show inline title | Off | As shipped | The inline title shows the kebab-case filename above the real `# H1`. |
 | Homepage → Homepage | `Home` | As shipped | Matches the real filename so it resolves on every device. |
-| Dataview → Enable JavaScript queries | On | As shipped | The task status view, on Home and every Project, Area, Person, and Resource page, is a DataviewJS block ([[body-sections]], Task status view); every other view stays DQL. Notes from outside could carry code, so the `dataviewjs` lint check allows only `Home.md` and one-line calls to the vault's own views in `Agents/views/<name>/`; intake fences the rest ([[role-vault-intake]], step 6b). |
+| Dataview → Enable JavaScript queries | On | As shipped | The task status view, on Home and every Project, Area, Person, and Resource page, is a DataviewJS block ([[body-sections]], Task status view); every other view stays DQL. Notes from outside could carry code, so the `dataviewjs` lint check allows only one-line calls to the vault's own views in `Agents/views/<name>/`, in every note, `Home.md` included; intake fences the rest ([[role-vault-intake]], step 6b). |
 | Dataview → Enable inline JavaScript queries | Off | As shipped | Nothing uses `$=` queries, and an imported note could run one when opened. |
 | Linter → rules | See [[#Linter rules]] | As shipped | The enabled rules only fix spacing and markup the vault already follows, so they never fight [[schema]] or `vault-lint`. |
 | Sync → Active community plugin list | Off, on every device | [[= owner =]]'s to set | Each device keeps its own enabled plugins ([[#Sync and other devices]]). |

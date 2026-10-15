@@ -1108,11 +1108,13 @@ class AuditRegressions(unittest.TestCase):
                  "Count: `$= dv.pages().length`\n")
         self.assertFinding("dataviewjs", "Resources/js-inline.md", "error", "inline DataviewJS")
 
-    def test_dataviewjs_allowed_on_home(self):
+    def test_dataviewjs_on_home_only_view_calls(self):
         home = self.root / "Home.md"
-        home.write_text(home.read_text() + "\n```dataviewjs\ndv.list([])\n```\n")
+        home.write_text(home.read_text() + "\n" + self.VIEW_CALL)
         found = [f for f in self.findings("dataviewjs") if f["path"] == "Home.md"]
         self.assertEqual(found, [], json.dumps(found, indent=1))
+        home.write_text(home.read_text() + "\n```dataviewjs\ndv.list([])\n```\n")
+        self.assertFinding("dataviewjs", "Home.md", "error", "dataviewjs block")
 
     VIEW_CALL = "```dataviewjs\nawait dv.view(\"Agents/views/task-status\", {status: \"next-action\", columns: \"due\"})\n```\n"
 
