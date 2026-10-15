@@ -52,7 +52,7 @@ No absolute paths: the vault location isn't a template value.
 
 ## Rule IDs
 
-Strict rules carry stable IDs, never list numbers: invariants `I1`–`I13` (changing one is a major version), heuristics `H1`–`H11` (minor), and one per module: `S1` store, `P1` pii, `F1` false-facts. They live in `template/Agents/strict-rules.md.jinja`, module rules inside their module blocks. Cite them as `[[strict-rules]] I1`. Vault-only rules are `L1`, `L2`, ... in `Agents/local/local-rules.md`, which the kit seeds once and never changes. `.scripts/README.md.jinja`'s coverage matrix is keyed by the same IDs.
+Strict rules carry stable IDs, never list numbers: invariants `I1`–`I13` (changing one is a major version), heuristics `H1`–`H12` (minor), and one per module: `S1` store, `P1` pii, `F1` false-facts. They live in `template/Agents/strict-rules.md.jinja`, module rules inside their module blocks. Cite them as `[[strict-rules]] I1`. Vault-only rules are `L1`, `L2`, ... in `Agents/local/local-rules.md`, which the kit seeds once and never changes. `.scripts/README.md.jinja`'s coverage matrix is keyed by the same IDs.
 
 ## Writing rules
 

@@ -99,7 +99,7 @@ Paths live outside the vault's content, in files Obsidian's own rename never tou
 When [[= owner =]] says "from now on…" about this vault ([[role-vault-admin]], Kit-managed files).
 
 1. Restate the rule in one sentence. It must not break an invariant or module rule ([[strict-rules]]); if it would, ask [[= owner =]].
-2. Append it to [[local-rules]] under `## Rules` with the next free ID: `- **L3. <rule>.** <scope, optional>`.
+2. Append it to [[local-rules]] under `## Rules` with the next free ID: `- **L3. <rule>.** <scope, optional>`. Claude Code asks [[= owner =]] before the edit ([[agent-protocol]], Guarded paths).
 3. Create any folder or file the rule names; a word list or check it needs goes in `.tidyvault.yml`'s `lint:` section. A mode a role gains goes in `Agents/local/roles/role-<name>-local.md` with its own Writes list; a system the vault connects to gets its row in `Agents/local/external-systems-local.md`.
 4. Add a dated line to [[changelog]]: `- **YYYY-MM-DD** — L3: <rule, short>.`
 5. Lint the changed files, then the whole vault: no new errors.
