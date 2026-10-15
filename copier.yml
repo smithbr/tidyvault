@@ -54,22 +54,24 @@ _exclude:
 owner_full:
   type: str
   help: Your full name ("Robin Vale")
-  validator: "[[% if not owner_full.strip() %]]Enter a name.[[% endif %]]"
+  validator: "[[% if not owner_full.strip() %]]Enter a name.[[% elif owner_full | select('in', '\"\\\\:#`$') | list %]]Leave out quotes, backslashes, colons, #, backticks, and $.[[% endif %]]"
 owner:
   type: str
   help: First name agents call you by in notes
   default: "[[= owner_full.split()[0] if owner_full.split() else '' =]]"
-  validator: "[[% if not owner.strip() %]]Enter a name.[[% endif %]]"
+  validator: "[[% if not owner.strip() %]]Enter a name.[[% elif owner | select('in', '\"\\\\:#`$') | list %]]Leave out quotes, backslashes, colons, #, backticks, and $.[[% endif %]]"
 owner_slug:
   type: str
   help: File name of your own note in People/ (Enter keeps the suggestion)
-  default: "[[= owner_full.strip() | lower | replace(' ', '-') =]]"
-  validator: "[[% if not owner_slug or owner_slug != owner_slug | lower or ' ' in owner_slug or '/' in owner_slug %]]Lowercase, with hyphens for spaces (robin-vale).[[% endif %]]"
+  # The vault-lint slugify (Agents/naming-and-style.md): accents folded, apostrophes and other non-ASCII dropped,
+  # every other run of non-alphanumerics a hyphen.
+  default: '[[% set ns = namespace(s=owner_full | lower) %]][[% for a, b in [("àáâãäåāăą","a"),("çćĉċč","c"),("ď","d"),("èéêëēĕėęě","e"),("ĝğġģ","g"),("ĥ","h"),("ìíîïĩīĭį","i"),("ĵ","j"),("ķ","k"),("ĺļľ","l"),("ñńņň","n"),("òóôõöōŏő","o"),("ŕŗř","r"),("śŝşšș","s"),("ţťț","t"),("ùúûüũūŭůűų","u"),("ŵ","w"),("ýÿŷ","y"),("źżž","z")] %]][[% for c in a %]][[% set ns.s = ns.s | replace(c, b) %]][[% endfor %]][[% endfor %]][[= ns.s | replace("''", "") | regex_replace("[^\x00-\x7f]", "") | regex_replace("[^a-z0-9]+", "-") | regex_replace("^-+|-+$", "") =]]'
+  validator: "[[% if not owner_slug or owner_slug | reject('in', 'abcdefghijklmnopqrstuvwxyz0123456789-') | list or owner_slug[0] == '-' %]]Lowercase letters, digits, and hyphens for spaces (robin-vale).[[% endif %]]"
 vault:
   type: str
   help: Vault name, short and lowercase; it also names the vault's 1Password items
   default: notes
-  validator: "[[% if not vault or vault != vault | lower or ' ' in vault or '/' in vault %]]Lowercase, no spaces or slashes (notes).[[% endif %]]"
+  validator: "[[% if not vault or vault | reject('in', 'abcdefghijklmnopqrstuvwxyz0123456789-') | list or vault[0] == '-' %]]Lowercase letters, digits, and hyphens only (notes).[[% endif %]]"
 
 store:
   type: bool
@@ -80,7 +82,7 @@ store_path:
   help: That folder, as a ~ path, outside any synced folder
   default: "~/[[= vault =]]-files"
   when: "[[= store =]]"
-  validator: "[[% if not store_path.startswith('~/') %]]Start the path with ~/ (~/notes-files).[[% endif %]]"
+  validator: "[[% if not store_path.startswith('~/') or store_path | length < 3 %]]Start the path with ~/ (~/notes-files).[[% elif store_path[2:] | reject('in', 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-/') | list or '..' in store_path or '//' in store_path or store_path.endswith('/') %]]Letters, digits, and . _ - / only, no spaces, .., //, or trailing / (~/notes-files).[[% endif %]]"
 pii:
   type: bool
   help: Keep personal details (account numbers, IDs, addresses) in 1Password, with notes holding only a key to each?
