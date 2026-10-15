@@ -71,7 +71,7 @@ Read-only. Each line below is a check; the report is the table of results.
 | Backups | `~/.local/share/[[= vault =]]-backup/vault-restic snapshots` (`.scripts/restic/README.md`, Everyday checks) | The newest snapshot is from the last night; the backup log shows no error |
 [[% endif %]]
 [[% if obsidian %]]
-| Plugins | `.scripts/obsidian-plugins --dry-run` | Every plugin in `community-plugins.json` has a `main.js`; the dry run lists only updates |
+| Plugins | `.scripts/obsidian-plugins --dry-run` | Every plugin in `community-plugins.json` has a `main.js`; the dry run lists only updates to pinned versions |
 [[% endif %]]
 | Run logs | `ls Agents/logs/` and the running sections ([[agent-protocol#Running alongside other agents]]) | No section open for more than 60 minutes without `### Checks` |
 | Drop folders | `ls _imports/ _captures/` | Empty, or a count for [[role-vault-intake]] in the report |
@@ -99,7 +99,7 @@ The table, one row per check, then what needs [[= owner =]] (a question task eac
 ### Steps
 
 1. `.scripts/obsidian-plugins --dry-run`: what would be installed or updated.
-2. `.scripts/obsidian-plugins` (missing plugins) or `--update` (everything to the latest release).
+2. `.scripts/obsidian-plugins` (missing plugins) or `--update` (everything to the kit's pinned versions). A `MISMATCH` line means a download didn't match its pinned sha256: install nothing more, and report it. `--latest` installs unchecked releases: only when [[= owner =]] asks for it in this conversation.
 3. Have [[= owner =]] reload Obsidian (View → Force Reload) and confirm Home renders.
 
 ### Done when

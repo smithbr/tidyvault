@@ -40,7 +40,7 @@ _exclude:
   - "[[% if not false_facts %]]Resources/false-facts.md*[[% endif %]]"
   - "[[% if not obsidian %]].obsidian[[% endif %]]"
   - "[[% if not obsidian %]].obsidian/**[[% endif %]]"
-  - "[[% if not obsidian %]].scripts/obsidian-plugins[[% endif %]]"
+  - "[[% if not obsidian %]].scripts/obsidian-plugins*[[% endif %]]"
   - "[[% if not obsidian %]]Agents/obsidian-settings.md*[[% endif %]]"
   - "[[% if not pii %]].scripts/pii-register-check*[[% endif %]]"
   - "[[% if not pii %]].scripts/pii-merge-queue*[[% endif %]]"

@@ -43,7 +43,7 @@ If [[= owner =]] uses Obsidian Sync, its switches are stored per device, outside
 
 ## Community plugins
 
-The kit ships these plugins' settings (`data.json`); `.scripts/obsidian-plugins` installs their code from each plugin's latest release ([[role-vault-ops]], Plugins). Settings listed under [[#Recommended settings]] aren't repeated here.
+The kit ships these plugins' settings (`data.json`); `.scripts/obsidian-plugins` installs their code at the versions pinned in `.scripts/obsidian-plugins.lock`, checking each file's sha256, since a plugin runs with full access to the computer ([[role-vault-ops]], Plugins). Kit updates move the pins. Settings listed under [[#Recommended settings]] aren't repeated here.
 
 | Plugin | Role here | Other settings that matter |
 |---|---|---|

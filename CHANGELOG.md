@@ -4,6 +4,7 @@ Versions are git tags `vX.Y.Z`; `VERSION` mirrors the latest. Invariant changes 
 
 ## Unreleased
 
+- `.scripts/obsidian-plugins` installs each plugin at the version pinned in `.scripts/obsidian-plugins.lock` and refuses a file whose sha256 doesn't match. `--update` moves installed plugins to the pins; `--latest` keeps the old unchecked latest-release install for when the owner asks; `--lock` re-pins (kit maintainers).
 - Copier validators: the vault name and the owner's slug take only lowercase letters, digits, and hyphens; the file store path only letters, digits, `.`, `_`, `-`, and `/` after `~/`, with no `..`; names leave out quotes, backslashes, colons, `#`, backticks, and `$`. These values are pasted into shell scripts and YAML.
 - `copier copy --trust` sets a new vault up: a copy-only task runs `vault-setup --new`, which installs the Obsidian plugins and makes the first git commit without asking, then offers the 1Password and backup steps. `copier update` now needs `--trust` too. Needs Copier 9.6.
 - Copier questions: plainer wording, the full name is asked first and suggests the first name, a one-line intro, and validators for empty names, the slug, the vault name, and the file store path.

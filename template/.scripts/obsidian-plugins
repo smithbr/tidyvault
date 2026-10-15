@@ -1,25 +1,32 @@
 #!/usr/bin/env python3
 """Install the community plugins listed in .obsidian/community-plugins.json.
 
-  .scripts/obsidian-plugins             install plugins that have no main.js yet
-  .scripts/obsidian-plugins --update    also replace installed ones with the latest release
+  .scripts/obsidian-plugins             install missing plugins at the kit's pinned versions
+  .scripts/obsidian-plugins --update    also bring installed ones to the pinned versions
   .scripts/obsidian-plugins --dry-run   print what would be downloaded
+  .scripts/obsidian-plugins --latest    install each plugin's latest release instead,
+                                        unchecked (only when the owner asks)
+  .scripts/obsidian-plugins --lock      kit maintainers: pin the latest releases in the lock file
 
 Run it from the vault root with Obsidian closed (or reload Obsidian after).
-Each plugin's GitHub repository comes from Obsidian's community plugin list;
-main.js, manifest.json and styles.css (when the release has one) come from its
-latest release. Settings (data.json) are never touched. Obsidian's own
-Settings -> Community plugins -> Browse does the same by hand.
+Plugins run with full access to the computer, so the pinned files are checked
+against the sha256 sums in .scripts/obsidian-plugins.lock (written by --lock, updated
+with the kit); a download that doesn't match is refused. main.js, manifest.json and
+styles.css (when the release has one) come from the pinned release of the plugin's
+GitHub repository. Settings (data.json) are never touched.
 """
 import argparse
+import hashlib
 import json
 import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
 
+LOCK = Path(__file__).resolve().parent / "obsidian-plugins.lock"
 LIST_URL = "https://raw.githubusercontent.com/obsidianmd/obsidian-releases/master/community-plugins.json"
-RELEASE_URL = "https://github.com/{repo}/releases/latest/download/{name}"
+LATEST_URL = "https://api.github.com/repos/{repo}/releases/latest"
+FILE_URL = "https://github.com/{repo}/releases/download/{tag}/{name}"
 FILES = ("main.js", "manifest.json", "styles.css")
 OPTIONAL = {"styles.css"}
 
@@ -29,48 +36,97 @@ def fetch(url):
         return resp.read()
 
 
+def sha256(body):
+    return hashlib.sha256(body).hexdigest()
+
+
+def download(repo, tag):
+    """The release's files by name; a missing optional file is left out."""
+    files = {}
+    for name in FILES:
+        try:
+            files[name] = fetch(FILE_URL.format(repo=repo, tag=tag, name=name))
+        except urllib.error.HTTPError as err:
+            if err.code != 404 or name not in OPTIONAL:
+                raise
+    return files
+
+
+def latest(repo):
+    return json.loads(fetch(LATEST_URL.format(repo=repo)))["tag_name"]
+
+
+def write_lock(wanted):
+    repos = {p["id"]: p["repo"] for p in json.loads(fetch(LIST_URL))}
+    lock = {}
+    for plugin in wanted:
+        repo = repos[plugin]
+        tag = latest(repo)
+        files = download(repo, tag)
+        lock[plugin] = {"repo": repo, "tag": tag, "sha256": {n: sha256(b) for n, b in sorted(files.items())}}
+        print(f"pinned     {plugin} {tag}")
+    LOCK.write_text(json.dumps(lock, indent=2) + "\n")
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--update", action="store_true", help="replace plugins already installed")
+    parser.add_argument("--update", action="store_true", help="bring installed plugins to the pinned versions")
+    parser.add_argument("--latest", action="store_true", help="latest releases instead, unchecked")
+    parser.add_argument("--lock", action="store_true", help="pin the latest releases in the lock file")
     parser.add_argument("--dry-run", action="store_true", help="download nothing")
     parser.add_argument("--root", default=".", help="vault root (default: current folder)")
     args = parser.parse_args()
 
     obsidian = Path(args.root) / ".obsidian"
     wanted = json.loads((obsidian / "community-plugins.json").read_text())
-    repos = {p["id"]: p["repo"] for p in json.loads(fetch(LIST_URL))}
+    if args.lock:
+        return write_lock(wanted)
+    lock = json.loads(LOCK.read_text())
 
     status = 0
     for plugin in wanted:
         folder = obsidian / "plugins" / plugin
-        if (folder / "main.js").exists() and not args.update:
+        pin = lock.get(plugin)
+        main_js = folder / "main.js"
+        if main_js.exists() and not (args.update or args.latest):
             print(f"installed  {plugin}")
             continue
-        repo = repos.get(plugin)
-        if repo is None:
-            print(f"UNKNOWN    {plugin} (not in Obsidian's community plugin list)", file=sys.stderr)
+        if pin is None and not args.latest:
+            print(f"UNPINNED   {plugin} (not in {LOCK.name}; --latest installs it unchecked)", file=sys.stderr)
             status = 1
             continue
-        if args.dry_run:
-            print(f"would get  {plugin} from {repo}")
+        if not args.latest and main_js.exists() and sha256(main_js.read_bytes()) == pin["sha256"]["main.js"]:
+            print(f"pinned     {plugin} {pin['tag']}")
             continue
         try:
-            files = {}
-            for name in FILES:
-                try:
-                    files[name] = fetch(RELEASE_URL.format(repo=repo, name=name))
-                except urllib.error.HTTPError as err:
-                    if err.code != 404 or name not in OPTIONAL:
-                        raise
-        except (urllib.error.URLError, TimeoutError) as err:
-            print(f"FAILED     {plugin} from {repo}: {err}", file=sys.stderr)
+            repo = pin["repo"] if pin else None
+            if repo is None:
+                repo = {p["id"]: p["repo"] for p in json.loads(fetch(LIST_URL))}.get(plugin)
+                if repo is None:
+                    print(f"UNKNOWN    {plugin} (not in Obsidian's community plugin list)", file=sys.stderr)
+                    status = 1
+                    continue
+            tag = latest(repo) if args.latest else pin["tag"]
+            if args.dry_run:
+                print(f"would get  {plugin} {tag} from {repo}{' (unchecked)' if args.latest else ''}")
+                continue
+            files = download(repo, tag)
+        except (urllib.error.URLError, TimeoutError, KeyError, ValueError) as err:
+            print(f"FAILED     {plugin}: {err}", file=sys.stderr)
             status = 1
             continue
+        if not args.latest:
+            bad = [n for n in set(files) | set(pin["sha256"]) if sha256(files.get(n, b"")) != pin["sha256"].get(n)]
+            if bad:
+                print(f"MISMATCH   {plugin} {tag}: {', '.join(sorted(bad))} differ from {LOCK.name}; not installed",
+                      file=sys.stderr)
+                status = 1
+                continue
         folder.mkdir(parents=True, exist_ok=True)
         for name, body in files.items():
             (folder / name).write_bytes(body)
-        version = json.loads(files["manifest.json"]).get("version", "?")
-        print(f"got        {plugin} {version}")
+        print(f"got        {plugin} {tag}{' (latest, unchecked)' if args.latest else ''}")
     return status
 
 
