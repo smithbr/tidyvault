@@ -1,0 +1,134 @@
+#!/usr/bin/env python3
+"""Append PII values to the queue file without anyone reading it back (Agents/sensitive-data.md).
+
+The queue, _files/_private/pii-register-queue.md, holds values waiting for the
+password manager. Agents may not read or edit it (.claude/settings.json); they add
+rows through this script, and the owner merges them with .scripts/pii-merge-queue.
+
+  pii-queue add KEY --where TEXT [--person NAME] [--notes TEXT]
+                      read the value from stdin and append one row; a key already
+                      queued with the same value is left as is, with a different
+                      value it is refused (one key, one value)
+  pii-queue count     number of rows waiting (for the Add PII register rows task)
+  pii-queue keys      the keys waiting, one per line
+
+Prints keys and counts, never a value. Options: --root DIR (default: the folder
+holding .scripts/). Exit 0 = done, 1 = refused, 2 = bad usage or no store.
+"""
+from __future__ import annotations
+
+import argparse
+import fcntl
+import os
+import re
+import sys
+from pathlib import Path
+
+CATEGORIES = ("id", "account", "credential", "contact", "dob", "health", "legal", "intimate")
+KEY = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*\.(%s)\.[a-z0-9]+(?:-[a-z0-9]+)*$" % "|".join(CATEGORIES))
+KEY_RE = re.compile(r"`([a-z0-9-]+\.[a-z]+\.[a-z0-9-]+)`")  # as in pii-merge-queue
+HEAD = "# PII register queue\n\nRows waiting for the password manager. Merge with `.scripts/pii-merge-queue`.\n\n"
+NAME = "pii-queue"
+
+
+def die(msg: str, code: int = 2):
+    print(f"{NAME}: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def cell(s: str) -> str:
+    """One table cell: pipes and newlines escaped so the row stays one row, and backticks
+    escaped so only the key cell can look like a key to pii-merge-queue."""
+    s = s.strip().replace("\r\n", "\n").replace("\r", "\n")
+    return s.replace("|", "&#124;").replace("`", "&#96;").replace("\n", "<br>")
+
+
+def rows(text: str) -> dict:
+    """key -> value cell, for every queued row."""
+    out = {}
+    for line in text.splitlines():
+        m = KEY_RE.search(line)
+        if not m:
+            continue
+        parts = [c.strip() for c in line[m.end():].split("|")]
+        # after the key cell: "", category, value, where, notes
+        out[m.group(1)] = parts[2] if len(parts) > 2 else ""
+    return out
+
+
+def queue_path(root: Path) -> Path:
+    files = root / "_files"
+    if not files.is_dir():
+        die("the file store isn't attached (_files/ missing); leave the item in _imports/ or _captures/ for a run where it is")
+    private = files / "_private"
+    if not private.is_dir():
+        old = os.umask(0o077)
+        try:
+            private.mkdir()
+        finally:
+            os.umask(old)
+    return private / "pii-register-queue.md"
+
+
+def read(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return ""
+
+
+def add(path: Path, key: str, value: str, where: str, person: str | None, notes: str) -> int:
+    m = KEY.match(key)
+    if not m:
+        die(f"bad key {key!r}: <person-slug>.<category>.<label>, category one of {', '.join(CATEGORIES)}")
+    if not value.strip():
+        die("no value on stdin")
+    value = cell(value)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_APPEND, 0o600)
+    with os.fdopen(fd, "r+", encoding="utf-8") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)  # other agents may be appending
+        fh.seek(0)
+        text = fh.read()
+        queued = rows(text)
+        if key in queued:
+            if queued[key] == value:
+                print(f"already queued: {key} ({len(queued)} rows waiting)")
+                return 0
+            print(f"{NAME}: {key} is already queued with a different value; use a new label", file=sys.stderr)
+            return 1
+        lead = "" if text.strip() else HEAD
+        if text and not text.endswith("\n"):
+            lead = "\n"
+        name = cell(person) if person else key.split(".")[0].replace("-", " ").title()
+        fh.write(f"{lead}- {name} | `{key}` | {m.group(1)} | {value} | {cell(where)} | {cell(notes)} |\n")
+        fh.flush()
+        os.fsync(fh.fileno())
+    print(f"queued: {key} ({len(queued) + 1} rows waiting)")
+    return 0
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(prog=NAME, description=__doc__.split("\n")[0])
+    ap.add_argument("--root", type=Path, default=Path(__file__).resolve().parent.parent)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    a = sub.add_parser("add")
+    a.add_argument("key")
+    a.add_argument("--where", required=True)
+    a.add_argument("--person")
+    a.add_argument("--notes", default="")
+    sub.add_parser("count")
+    sub.add_parser("keys")
+    args = ap.parse_args(argv)
+    path = queue_path(args.root)
+    if args.cmd == "add":
+        return add(path, args.key, sys.stdin.read(), args.where, args.person, args.notes)
+    queued = rows(read(path))
+    if args.cmd == "count":
+        print(len(queued))
+    elif queued:
+        print("\n".join(queued))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

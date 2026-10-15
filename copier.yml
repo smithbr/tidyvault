@@ -44,6 +44,7 @@ _exclude:
   - "[[% if not obsidian %]]Agents/obsidian-settings.md*[[% endif %]]"
   - "[[% if not pii %]].scripts/pii-register-check*[[% endif %]]"
   - "[[% if not pii %]].scripts/pii-merge-queue*[[% endif %]]"
+  - "[[% if not pii %]].scripts/pii-queue[[% endif %]]"
   - "[[% if not pii %]]Agents/sensitive-data.md*[[% endif %]]"
   - "[[% if not pii %]]Agents/pii-allowlist.md*[[% endif %]]"
   - "[[% if not pii %]]Resources/pii-register.md*[[% endif %]]"

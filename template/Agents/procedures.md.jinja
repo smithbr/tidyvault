@@ -180,6 +180,6 @@ Older than git, or git itself damaged: Obsidian Sync (if used) keeps version his
 
 1. Pick the key, `<person-slug>.<category>.<label>`; reuse the existing one if the stub [[pii-register]] already lists this value.
 2. Replace the value with `[[pii-register#<Person>|🔒 <key>]]`. A health, legal, or intimate passage becomes a one-line summary plus its key.
-3. Add the key under the person in the stub, and the row with its value to `_files/_private/pii-register-queue.md` (Mac only); update the **Add PII register rows** task.
+3. Add the key under the person in the stub, and queue the value with `.scripts/pii-queue add <key> --where "<note>"`, the value on stdin (Mac only; [[sensitive-data]], What to do); update the **Add PII register rows** task.
 4. Set `sensitive: true`. Report the key, never the value. See [[sensitive-data]].
 [[% endif %]]

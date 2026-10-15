@@ -22,6 +22,7 @@ Tooling for the vault. Hidden from Obsidian (dot-folder), not notes.
 [[% endif %]]
 [[% if pii %]]
 | `pii-register-check` | Needs the 1Password CLI (`op`) signed in: checks the PII register document against `Resources/pii-register.md` (every key both ways), and with a file argument that the file is byte-identical. Prints keys and checksums, never values. |
+| `pii-queue` | `add KEY --where TEXT` appends one value, read from stdin, to `_files/_private/pii-register-queue.md` (one key, one value: a key queued with another value is refused); `count` and `keys` report what's waiting. The way agents queue PII, since they may not read the file. Prints keys and counts, never values. |
 | `pii-merge-queue` | Needs the 1Password CLI (`op`) signed in: merges `_files/_private/pii-register-queue.md` into the register document under each person's heading, asks before uploading, skips keys already there, removes exact duplicate rows (lists same-key conflicts), checks every key landed, then offers to empty the queue. `--dry-run` shows the plan. Prints keys and counts, never values. |
 [[% endif %]]
 [[% if backup %]]
