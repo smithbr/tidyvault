@@ -5,11 +5,10 @@
                 [--root DIR] [--today YYYY-MM-DD]
 
 Runs `vault-lint --review --json`, reads task files for what the JSON lacks, and
-prints: overdue, due within two days, today's free blocks (Mac only), ranked
-candidate next actions, inbox count, question count (never the questions),
-stale waiting-for, agent tasks waiting 2+ days, and the week ahead by day.
-Fitting actions into free blocks is the agent's job. --snapshot-facts prints
-only the facts the Home snapshot could cite. Never writes files. Stdlib only.
+prints: overdue, due within two days, ranked candidate next actions, inbox
+count, question count (never the questions), stale waiting-for, agent tasks
+waiting 2+ days, and the week ahead by day. --snapshot-facts prints only the
+facts the Home snapshot could cite. Never writes files. Stdlib only.
 """
 
 import argparse
