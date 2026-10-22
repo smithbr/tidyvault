@@ -43,12 +43,12 @@ If [[= owner =]] uses Obsidian Sync, its switches are stored per device, outside
 
 ## Community plugins
 
-The kit ships these plugins' settings (`data.json`); `.scripts/obsidian-plugins` installs their code from each plugin's latest release ([[role-vault-ops]], Plugins). Settings listed under [[#Recommended settings]] aren't repeated here.
+The kit ships these plugins' settings (`data.json`); `.scripts/obsidian-plugins` installs their code at the versions pinned in `.scripts/obsidian-plugins.lock`, checking each file's sha256, since a plugin runs with full access to the computer ([[role-vault-ops]], Plugins). Kit updates move the pins. Settings listed under [[#Recommended settings]] aren't repeated here.
 
 | Plugin | Role here | Other settings that matter |
 |---|---|---|
-| Dataview | Renders the views in `Home.md` and in Projects, Areas, and People ([[body-sections]]). Views only; facts live in frontmatter. | DQL on; JavaScript queries on, for the task status view and Home only ([[body-sections]], Task status view); inline JavaScript queries off. |
-| Templater | Fills new files from `Agents/templates/` and renames them to their slug. | Trigger on new file creation, folder mode. Fires only on files created empty, so Sync arrivals, git restores, and agent-written files are untouched. |
+| Dataview | Renders the views in `Home.md` and in Projects, Areas, and People ([[body-sections]]). Views only; facts live in frontmatter. | DQL on; JavaScript queries on, for one-line calls to the vault's own views, such as the task status view ([[body-sections]], Task status view); inline JavaScript queries off. |
+| Templater | Fills new files from `Agents/templates/` and renames them to their slug. | Trigger on new file creation (on by hand, per device: [[#Recommended settings]]), folder mode. A file created empty gets its folder's template; a new file that isn't empty (a Sync arrival, a git pull, an agent's write, a file dropped into the vault) has every Templater tag in it run, code fences included. So tags live only in `Agents/templates/`, as the kit's own commands, and `vault-lint`'s `templater` check enforces both; the drop folders are ignored on creation, and intake neutralizes tags before filing ([[role-vault-intake]], step 6b). |
 | Obsidian Git | Commits, pulls, and pushes on a timer: the main safety net ([[external-systems]]). One machine only. | Merge on sync. |
 | Linter | Formats spacing and markup on save; `vault-lint --fix` applies the same rules ([[#Linter rules]]). | — |
 | Homepage | Opens the dashboard on startup, replacing open tabs. | — |
@@ -59,19 +59,21 @@ Plugins [[= owner =]] adds later get a row here; the manual never comes to depen
 
 ## Recommended settings
 
-The shipped `.obsidian/` matches every row. When [[= owner =]] changes one, record it in the Now column.
+The shipped `.obsidian/` matches every row except the one marked By hand. When [[= owner =]] changes one, record it in the Now column.
 
 | Where | Set to | Now | Why |
 |---|---|---|---|
 | Files and links → Default location for new notes | In the folder specified: `Tasks` | As shipped | A stray new file lands where captures belong, not at the root (a lint error). |
 | Files and links → Default location for new attachments | In the folder specified: `_attachments` | As shipped | Then move the file into its `<note-slug>/` folder[[%+ if store +%]], in the store[[%+ endif +%]] ([[organization]], Attachments). |
 | Files and links → Excluded files | `Archive/`, `Agents/templates/`, `_attachments/_raw/`, `_captures/`, `_imports/`, `_tmp/`[[%+ if store +%]], `_files/`[[%+ endif +%]] | As shipped | Keeps search and link suggestions clean. Links into excluded folders still resolve. |
+| Templater → File creation → Trigger Templater on new file creation | On | By hand, on each device | Folder templates need it. Templater keeps it in each device's own storage, not in `data.json`, so the kit can't ship it and `vault-setup` can't check it; turn it on once on every device that opens the vault. It's also what makes Templater run the tags in any new file that isn't empty ([[#Community plugins]], Templater), so the Excluded folders below and the `templater` lint check matter from then on; a device that never makes notes by hand can leave it off. |
 | Templater → Template folder location | `Agents/templates` | As shipped | Where the `template-*` templates live. |
-| Templater → Folder templates | `Tasks` → `Agents/templates/template-task.md`, `Projects` → `template-project`, `Areas` → `template-area`, `Resources` → `template-resource`, `People` → `template-person` (trigger on new file creation: on) | As shipped | New files in each folder start from the right skeleton. |
+| Templater → File creation → Excluded folders | `_imports`, `_captures`, `_attachments`, `_files`, `_tmp` | As shipped | Files from outside land there first; Templater would run any tag in them the moment they appear. A vault made before this setting shipped adds the five folders by hand. |
+| Templater → Folder templates | `Tasks` → `Agents/templates/template-task.md`, `Projects` → `template-project`, `Areas` → `template-area`, `Resources` → `template-resource`, `People` → `template-person` | As shipped (works once the trigger above is on) | New files in each folder start from the right skeleton. |
 | QuickAdd → "Capture to inbox" | A Template choice: template `Agents/templates/template-capture.md`, file name `capture-{{DATE:YYYY-MM-DD-HHmmss}}`, folder `_captures`; open the new file. Templater: auto jump to cursor on | As shipped | A capture is a free-form scratch note; intake files it ([[role-vault-intake]]). |
 | Appearance → Show inline title | Off | As shipped | The inline title shows the kebab-case filename above the real `# H1`. |
 | Homepage → Homepage | `Home` | As shipped | Matches the real filename so it resolves on every device. |
-| Dataview → Enable JavaScript queries | On | As shipped | The task status view, on Home and every Project, Area, Person, and Resource page, is a DataviewJS block ([[body-sections]], Task status view); every other view stays DQL. Notes from outside could carry code, so the `dataviewjs` lint check allows only `Home.md` and one-line calls to the vault's own views in `Agents/views/<name>/`; intake fences the rest ([[role-vault-intake]], step 6b). |
+| Dataview → Enable JavaScript queries | On | As shipped | The task status view, on Home and every Project, Area, Person, and Resource page, is a DataviewJS block ([[body-sections]], Task status view); every other view stays DQL. Notes from outside could carry code, so the `dataviewjs` lint check allows only one-line calls to the vault's own views in `Agents/views/<name>/`, in every note, `Home.md` included; intake fences the rest ([[role-vault-intake]], step 6b). |
 | Dataview → Enable inline JavaScript queries | Off | As shipped | Nothing uses `$=` queries, and an imported note could run one when opened. |
 | Linter → rules | See [[#Linter rules]] | As shipped | The enabled rules only fix spacing and markup the vault already follows, so they never fight [[schema]] or `vault-lint`. |
 | Sync → Active community plugin list | Off, on every device | [[= owner =]]'s to set | Each device keeps its own enabled plugins ([[#Sync and other devices]]). |

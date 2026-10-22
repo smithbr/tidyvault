@@ -11,7 +11,7 @@ Part of the [[README]]. Step-by-step recipes for changes that touch more than on
 1. Search first: `grep -ril "<key words>" Tasks Projects Areas Resources People Archive`, and `find . -name '<slug>.md' -not -path './.*'`.
 2. If a match exists, update it (or reopen it from `Archive/`) instead.
 3. Copy the skeleton from the matching `template-*` template in `Agents/templates/`. Fill `title`, the H1, and the slug filename ([[naming-and-style]]). Set `created` to today.
-4. Replace every Templater tag (angle-bracket percent-sign tags) with its value. None may remain outside `Agents/templates/`; Templater may execute them when the file appears in Obsidian.
+4. Replace every Templater tag (angle-bracket percent-sign tags) with its value. None may remain outside `Agents/templates/`, nor in text you copy into any note, code fences included: Templater runs every tag in a new file that isn't empty the moment it appears in Obsidian. Write one you must show as `&lt;%`. Inside it, the templates hold only the kit's own commands (title, `tp.file.title`, `tp.file.cursor`, `tp.date.now`, `tp.system.prompt`, and the title-and-move script), since Obsidian runs them for every new note; `vault-lint`'s `templater` check enforces both.
 5. Close the loops: link the task to its Resources and project, and so on ([[linking]]).
 6. Lint.
 
@@ -96,10 +96,10 @@ Paths live outside the vault's content, in files Obsidian's own rename never tou
 
 ## Add a local rule
 
-When [[= owner =]] says "from now on…" about this vault ([[role-vault-admin]], Kit-managed files).
+When [[= owner =]] says "from now on…" about this vault ([[role-vault-admin]]; what the kit owns: [[README]], Kit-managed pages).
 
 1. Restate the rule in one sentence. It must not break an invariant or module rule ([[strict-rules]]); if it would, ask [[= owner =]].
-2. Append it to [[local-rules]] under `## Rules` with the next free ID: `- **L3. <rule>.** <scope, optional>`.
+2. Append it to [[local-rules]] under `## Rules` with the next free ID: `- **L3. <rule>.** <scope, optional>`. Claude Code asks [[= owner =]] before the edit ([[agent-protocol]], Guarded paths).
 3. Create any folder or file the rule names; a word list or check it needs goes in `.tidyvault.yml`'s `lint:` section. A mode a role gains goes in `Agents/local/roles/role-<name>-local.md` with its own Writes list; a system the vault connects to gets its row in `Agents/local/external-systems-local.md`.
 4. Add a dated line to [[changelog]]: `- **YYYY-MM-DD** — L3: <rule, short>.`
 5. Lint the changed files, then the whole vault: no new errors.
@@ -180,6 +180,6 @@ Older than git, or git itself damaged: Obsidian Sync (if used) keeps version his
 
 1. Pick the key, `<person-slug>.<category>.<label>`; reuse the existing one if the stub [[pii-register]] already lists this value.
 2. Replace the value with `[[pii-register#<Person>|🔒 <key>]]`. A health, legal, or intimate passage becomes a one-line summary plus its key.
-3. Add the key under the person in the stub, and the row with its value to `_files/_private/pii-register-queue.md` (Mac only); update the **Add PII register rows** task.
+3. Add the key under the person in the stub, and queue the value with `.scripts/pii-queue add <key> --where "<note>"`, the value on stdin (Mac only; [[sensitive-data]], What to do); update the **Add PII register rows** task.
 4. Set `sensitive: true`. Report the key, never the value. See [[sensitive-data]].
 [[% endif %]]

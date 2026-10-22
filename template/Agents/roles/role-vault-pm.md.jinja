@@ -44,7 +44,7 @@ Run logs: Sort and Review log as the agent's name; Project logs as `Agents/logs/
 3. For each `inbox` task, oldest first, run the decision tree ([[gtd]], Clarify). Search `Tasks/`, `Projects/`, and `Archive/` before creating anything.
 4. **Answered questions.** A task with a `**Question**::` line ([[gtd]], Questions for [[= owner =]]) waits for [[= owner =]] to answer in the task: a ticked box or an `**Answer**::` line. Apply each answer (update the linked task, add the next action, or file the fact); close the question task when every question in it is answered (`done`, `completed:`, move to `Archive/`). Never ask them in chat or re-ask them.
 4b. **Set from a task list.** The status dropdown on Home and on Project, Area, Person, and Resource pages ([[body-sections]], Task status view) writes only `status`, `completed`, and `waiting_since`. Finish each change per the task state machine ([[gtd]]): a `done` or `cancelled` task still in `Tasks/` gets `archived`, `archived_from`, and a move to `Archive/`, and its project's next step is promoted (step 0 does both); a `waiting-for` task with no `waiting_on` gets one, or a question for [[= owner =]]; a new `next-action` gets `contexts`; a `queued` task gets its `project` or `blocked_by`.
-5. When an item's destination or meaning is truly ambiguous, turn it into a question task ([[agent-protocol]], Questions go to Home, not chat) and move on.
+5. When an item's destination or meaning is truly ambiguous, turn it into a question task ([[gtd]], Questions for [[= owner =]]) and move on.
 
 ### Model
 
@@ -100,7 +100,7 @@ Daily runs alongside other agents; weekly runs alone.
 
 ### Steps: daily
 
-1. Run `.scripts/vault-brief` (Mac down: `--no-calendar`). It prints overdue, due within 2 days, free blocks, ranked candidate next actions, inbox count, `Waiting on you: N questions on Home.`, stale waiting-for, agent tasks waiting 2+ days, and the week ahead by day. Fit the candidates into the free blocks; for "week ahead" or "preview" use only that section. (`python3 .scripts/vault-lint --review --days 7` is what it reads.)
+1. Run `.scripts/vault-brief`. It prints overdue, due within 2 days, ranked candidate next actions, inbox count, `Waiting on you: N questions on Home.`, stale waiting-for, agent tasks waiting 2+ days, and the week ahead by day. For "week ahead" or "preview" use only that section. (`python3 .scripts/vault-lint --review --days 7` is what it reads.)
 2. Follow [[gtd]] "Reflect: daily review", which ends with the week ahead (step 6); [[gtd]] "Engage" for "what now?"; only step 6 for "week ahead" or "preview".
 3. On a daily review (not "what now?" or "what's overdue?"), run `.scripts/vault-brief --snapshot-facts`, pick at most five bullets from it, and rewrite the snapshot in `Home.md` (step 4).
 4. **Home snapshot.** Replace only the block from `Snapshot as of …:` to the first `##` heading; never touch the Dataview views or the rest of the page, which are [[role-vault-admin]]'s. First line `Snapshot as of <Mon D, YYYY>:`, then at most five bullets, each a short label and links, for what matters in the coming week: a trip, a hard deadline, the project in focus. Every fact must already live in its Task, Project, Area, Resource, or Person ([[body-sections]], Home); if it doesn't, leave it out and say so in the report.
@@ -113,7 +113,7 @@ Daily runs alongside other agents; weekly runs alone.
 
 ### Done when
 
-Daily: [[= owner =]] has the overdue items, today's free blocks (or why they're missing), today's next actions fitted into them (three at most for "what now?"), the inbox count, `Waiting on you: N questions on Home.` (never the questions themselves), each stale waiting-for filed in the day's question task, and the week ahead by day. Weekly: every step of the weekly review is checked.
+Daily: [[= owner =]] has the overdue items, today's next actions by `contexts` (three at most for "what now?"), the inbox count, `Waiting on you: N questions on Home.` (never the questions themselves), each stale waiting-for filed in the day's question task, and the week ahead by day. Weekly: every step of the weekly review is checked.
 
 ### Report
 

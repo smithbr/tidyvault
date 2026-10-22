@@ -17,8 +17,8 @@ uvx copier copy --trust gh:smithbr/tidyvault my-vault
 ```
 
 1. Answer the questions. Copier installs the Obsidian plugins, makes the first git commit, and offers the 1Password and backup steps.
-2. Open `my-vault` in Obsidian and choose "Trust author and enable plugins".
-3. From `my-vault`, rerun `python3 .scripts/vault-setup` until every line says ok.
+2. Open `my-vault` in Obsidian, choose "Trust author and enable plugins", then turn on Settings → Templater → "Trigger Templater on new file creation" (Templater keeps it per device, so once on each device).
+3. From `my-vault`, rerun `python3 .scripts/vault-setup` until it prints "done".
 
 Needs git, Python 3.9+, and [uv](https://docs.astral.sh/uv/).
 
@@ -27,7 +27,7 @@ Needs git, Python 3.9+, and [uv](https://docs.astral.sh/uv/).
 - **GTD folders.** `Tasks`, `Projects`, `Areas`, `Resources`, `People`, `Archive`, one file per thing, and a `Home` dashboard.
 - **A rulebook the agent reads first.** Where things go, which fields a note has, and what the agent may do alone, must report, or must ask about.
 - **Six roles.** intake, pm, docs, ask, ops, admin. Each writes only what its page allows.
-- **A linter that fixes.** 26 checks (links, fields, tasks with no home, projects with no next step, personal data); `--fix` repairs the safe ones.
+- **A linter that fixes.** 27 checks (links, fields, tasks with no home, projects with no next step, personal data); `--fix` repairs the safe ones.
 - **A log.** Every agent run is recorded; every question for you lands on the dashboard.
 - **Updates.** `copier update --trust` brings new rules and checks without touching your notes or your rules in `Agents/local/`.
 - **Guided setup.** `vault-setup` checks each step, does the ones it can, and says what's left.

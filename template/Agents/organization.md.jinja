@@ -133,8 +133,8 @@ Original files live outside the vault, so Sync and git stay small.
 [[% if backup %]]
 - **Backup:** nightly restic snapshots of the store ([[vault-backup-and-restore]]). Git never holds store files.
 [[% endif %]]
-- **Private:** `_files/_private/` holds values waiting for the password manager: a PII register draft or `pii-register-queue.md`[[%+ if pii +%]] ([[sensitive-data]])[[%+ endif +%]]. Nothing embeds or links into it, it's never read into a report or chat, `vault-lint` skips it, and nothing in it is moved or deleted until [[= owner =]] says so.
-- **Reading:** on the Mac, agents may read store files like any vault file. Write to the store only through the importer steps above, `store-move`, the [[procedures]] (Rename, Merge, Delete), and an erasure.
+- **Private:** `_files/_private/` holds values waiting for the password manager: a PII register draft or `pii-register-queue.md`[[%+ if pii +%]] ([[sensitive-data]])[[%+ endif +%]]. Nothing embeds or links into it, agents never read or edit it (`.claude/settings.json` denies it[[%+ if pii +%]]; they add PII rows with `.scripts/pii-queue`[[%+ endif +%]]), it's never read into a report or chat, `vault-lint` skips it, and nothing in it is moved or deleted until [[= owner =]] says so.
+- **Reading:** on the Mac, agents may read store files like any vault file, except `_files/_private/`. Write to the store only through the importer steps above, `store-move`, the [[procedures]] (Rename, Merge, Delete), and an erasure.
 [[% endif %]]
 
 ### Capture notes

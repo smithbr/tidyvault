@@ -5,7 +5,7 @@ Never deletes or edits an original; every move is byte for byte, checked by sha2
 
   import-files inventory              list every file in _imports/ and _captures/ with size, type,
                                       sha256, duplicate status (existing filed_path), note vs
-                                      foreign file, and dataviewjs / inline $= code
+                                      foreign file, and dataviewjs / inline $= / Templater code
   import-files file --src PATH --slug NOTE-SLUG --name NAME [--dry-run]
                                       move one non-note file into _files/<slug>/ (or
                                       _attachments/<slug>/ when the store is locked or absent),
@@ -15,7 +15,8 @@ Never deletes or edits an original; every move is byte for byte, checked by sha2
   import-files done-capture PATH      move a filed capture note to
                                       _attachments/_raw/_captures/YYYY-MM-DD/<name>.md.txt
                                       (subfolders kept; -2, -3 on a name clash)
-  import-files fence-fix PATH         ```dataviewjs -> ```text; strip backticks from inline `$=`
+  import-files fence-fix PATH         ```dataviewjs -> ```text; strip backticks from inline `$=`;
+                                      every Templater "<%" -> "&lt;%", which Templater ignores
 
 Options: --root DIR (default: the folder holding .scripts/), --today YYYY-MM-DD.
 The store counts as attached when DIR/_files exists and `.scripts/store-image status` exits 0.
@@ -39,6 +40,7 @@ DROPS = ["_imports", "_captures"]
 SKIP = {".gitkeep", ".DS_Store"}
 DVJS = re.compile(r"^(\s{0,3})(```|~~~)\s*dataviewjs\b", re.M)
 INLINE = re.compile(r"`(\$=[^`\n]*)`")
+TEMPLATER = "<%"  # starts every Templater tag; Templater runs them in any new non-empty file
 NOTE_EXT = {".md", ".markdown"}
 
 
@@ -105,6 +107,8 @@ def code_flags(p: Path) -> list[str]:
         flags.append("dataviewjs")
     if INLINE.search(text):
         flags.append("inline-$=")
+    if TEMPLATER in text:
+        flags.append("templater")
     return flags
 
 
@@ -227,6 +231,9 @@ def cmd_fence_fix(root: Path, args) -> int:
         return m.group(1)
 
     new = INLINE.sub(inline, DVJS.sub(fence, text))
+    if TEMPLATER in new:
+        changes.append(f"templater: {new.count(TEMPLATER)} '<%' -> '&lt;%'")
+        new = new.replace(TEMPLATER, "&lt;%")
     if not changes:
         print("nothing to fix")
         return 0

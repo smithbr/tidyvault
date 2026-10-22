@@ -12,6 +12,9 @@ Tooling for the vault. Hidden from Obsidian (dot-folder), not notes.
 | `vault-brief` | Daily review as Markdown from `vault-lint --review --json` (`--snapshot-facts` lists facts the Home snapshot could cite). Read-only. |
 | `sort-inbox` | Read-only inbox pre-pass: answered question tasks, tasks with explicit signals, tasks needing judgment. |
 | `pm-check <project-slug>` | Read-only project check: phase, open tasks, next-action rule, best queued task to promote, stale waiting-for, overdue. |
+[[% if obsidian %]]
+| `obsidian-plugins` | Installs the plugins in `.obsidian/community-plugins.json` at the versions pinned in `obsidian-plugins.lock`, refusing any file whose sha256 doesn't match; `--update` moves installed ones to the pins, `--dry-run` shows the plan, `--latest` installs unchecked latest releases (owner's call), `--lock` re-pins (kit maintainers). |
+[[% endif %]]
 | `tests/` | Fixture vaults and the test runner for `vault-lint` (`run.py`); the script tests are `test_*.py` beside it (`python3 -m unittest discover -s .scripts/tests`). |
 [[% if store %]]
 | `store-move` | moves filed attachments into the file store (`_files/`), checking checksums and repointing links. `--dry-run` first. Rules: `Agents/organization.md` (File store). |
@@ -19,6 +22,7 @@ Tooling for the vault. Hidden from Obsidian (dot-folder), not notes.
 [[% endif %]]
 [[% if pii %]]
 | `pii-register-check` | Needs the 1Password CLI (`op`) signed in: checks the PII register document against `Resources/pii-register.md` (every key both ways), and with a file argument that the file is byte-identical. Prints keys and checksums, never values. |
+| `pii-queue` | `add KEY --where TEXT` appends one value, read from stdin, to `_files/_private/pii-register-queue.md` (one key, one value: a key queued with another value is refused); `count` and `keys` report what's waiting. The way agents queue PII, since they may not read the file. Prints keys and counts, never values. |
 | `pii-merge-queue` | Needs the 1Password CLI (`op`) signed in: merges `_files/_private/pii-register-queue.md` into the register document under each person's heading, asks before uploading, skips keys already there, removes exact duplicate rows (lists same-key conflicts), checks every key landed, then offers to empty the queue. `--dry-run` shows the plan. Prints keys and counts, never values. |
 [[% endif %]]
 [[% if backup %]]
@@ -48,7 +52,7 @@ A whole-vault run takes about 0.2 s.
 Checks, in output order: `structure`, `file-format`, `frontmatter-present`,
 `frontmatter-syntax`, `filename`, `unique-names`, `title`, `schema`, `links`,
 `relations`, `waiting-on`, `tasks`, `projects`, `archive`, `attachments`, `manifest`, `anatomy`,
-`dataview`, `dataviewjs`, `dates`, `pii`, `sensitive`, `format`, `orphans`, `facts`, `source-urls`. A check whose module is off in `.tidyvault.yml` is skipped (`--list-checks` says which).
+`dataview`, `dataviewjs`, `templater`, `dates`, `pii`, `sensitive`, `format`, `orphans`, `facts`, `source-urls`. A check whose module is off in `.tidyvault.yml` is skipped (`--list-checks` says which).
 
 `--fix` only does rewrites that can't change meaning: key order, quoting bare
 wikilinks, inline → block lists, list indent, unquoting ISO dates, deleting
@@ -81,7 +85,7 @@ reported (`file-format` error); BOM and CRLF are reported and handled; symlinks
 are reported and never followed (they still resolve as link targets); notes over
 2 MB are reported and skipped by content checks.
 
-Exempt: `Agents/templates/` note bodies (Templater source) and the root files
+Exempt: `Agents/templates/` note bodies (Templater source; only the `templater` check reads them) and the root files
 `AGENTS.md` and `llms.txt` (not vault notes; they still count
 for `unique-names`). Project rules follow the state machine in `Agents/gtd.md`.
 
@@ -174,6 +178,7 @@ Which checks enforce each rule; the rule text lives in `Agents/strict-rules.md`,
 [[% endif %]]
 | H8 | — |
 | H9 | — |
+| H12 | — |
 | I13 | all |
 [[% if false_facts %]]
 | F1 | `facts` |
@@ -189,7 +194,7 @@ Which checks enforce each rule; the rule text lives in `Agents/strict-rules.md`,
 | organization.md | `attachments`, `manifest` |
 | linking.md | `links`, `unique-names`, `frontmatter-syntax`, `relations`, `facts` |
 | naming-and-style.md | `title`, `filename`, `projects`, `anatomy`, `schema` |
-| procedures.md | `anatomy` |
+| procedures.md | `anatomy`, `templater` |
 [[% if pii %]]
 | sensitive-data.md | `pii`, `sensitive`, `relations`, `waiting-on` |
 [[% endif %]]

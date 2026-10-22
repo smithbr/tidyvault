@@ -125,7 +125,7 @@ Every question comes with a place to answer it:
   - **Answer**::
 ```
 
-[[= owner =]] answers in the task, whenever it suits: ticks a box, or types after `**Answer**::` (then ticks the box). The [[role-vault-pm]] applies each answer on its next run and closes the task. No agent asks these in chat; reports give only the count ([[agent-protocol]], Questions go to Home, not chat).
+[[= owner =]] answers in the task, whenever it suits: ticks a box, or types after `**Answer**::` (then ticks the box). The [[role-vault-pm]] applies each answer on its next run and closes the task. No agent asks these in chat; reports give only the count ([[agent-protocol]], The report).
 
 ## Agent tasks
 
@@ -155,7 +155,7 @@ On request or in a morning brief. Report decisions, not a status essay. Without 
 
 1. `python3 .scripts/vault-lint`: note new errors.
 2. **Overdue and due soon:** open tasks with `due` on or before today + 2 days.
-3. **Today's next actions:** `next-action` tasks, grouped by `contexts`, then fitted into **today's free time**: the open blocks of 15 minutes or more between 8 AM and 8 PM PT, read live from Apple Calendar's Home and Work calendars ([[role-vault-pm]], Free time today). Short gaps take `calls` and `phone` tasks; blocks of an hour or more take `computer` work. Mac unreachable: say so and group by `contexts` only.
+3. **Today's next actions:** `next-action` tasks, grouped by `contexts`. Fitting them into a calendar's free time is a vault's own addition, in `Agents/local/roles/role-vault-pm-local.md` ([[README]], Kit-managed pages).
 4. **Inbox count:** `inbox` tasks to clarify.
 5. **Agent tasks waiting 2+ days** ([[#Agent tasks]]): name the role to run, one line each, in the briefing. **Waiting for, 7+ days** (people, not agents): each becomes a question (chase, wait, or drop) in the day's open question task, `Answer daily review decisions`, created if none is open ([[#Questions for [[= owner =]]]]).
 6. **Week ahead**: the next seven days, from the vault only. `python3 .scripts/vault-lint --review --days 7` lists everything due through today + 7; regroup what step 2 didn't already show by day, leaving out empty days, and add:

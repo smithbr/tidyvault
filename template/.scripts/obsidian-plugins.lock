@@ -1,0 +1,65 @@
+{
+  "dataview": {
+    "repo": "blacksmithgu/obsidian-dataview",
+    "tag": "0.5.70",
+    "sha256": {
+      "main.js": "6bb1cf7010afad830e73575fca0e2bfbd3279c562e3d9d24f2d2f45161eb7d00",
+      "manifest.json": "9235db47112da81b85591c79ecb9ae2574e5e72207056e976472f90616286185",
+      "styles.css": "3306dd9032e00f989ba7233a37fd255bc4d3f4340cee661762e952f3f6aa1de9"
+    }
+  },
+  "homepage": {
+    "repo": "mirnovov/obsidian-homepage",
+    "tag": "4.5.0",
+    "sha256": {
+      "main.js": "567b14e6e7913301b46d9b61fd36a4081fa7de1818f1926c1fcb586792aab201",
+      "manifest.json": "5e7e20085c952d10a10d373ca5718516997f52b2dfeae1627cafc9c70f8df29c",
+      "styles.css": "bf346def46e6626446c54983f7e6ce4775b84b01159cd046301e9be5c3407589"
+    }
+  },
+  "quickadd": {
+    "repo": "chhoumann/quickadd",
+    "tag": "2.32.1",
+    "sha256": {
+      "main.js": "6423b2d14b60bc51fc6b6f61f835e08c5842d28e5a1a43ab5601ccd37b4e44c5",
+      "manifest.json": "b7610b4c1d37c2c73f781c294c1a380e731e797f9858d2d825e7facc1ac3add1",
+      "styles.css": "9467ef3622cd1137ce5a0148e16de23b9f5be87bc8c204fb6050c48f8f29994d"
+    }
+  },
+  "templater-obsidian": {
+    "repo": "silentvoid13/Templater",
+    "tag": "2.26.0",
+    "sha256": {
+      "main.js": "0acd45cfdb3a7337e2bef511699bc1f819dc64645ad3480df33579d42d2dcbaa",
+      "manifest.json": "91c9fa8510082fffa0b3d022aac4986e3b392295b1126e847ead7ed7289169b8",
+      "styles.css": "67a6dd2d1d6dedca1287c334ca884ec4196433f71ca47388a0bd3eac14cf8b5f"
+    }
+  },
+  "omnisearch": {
+    "repo": "scambier/obsidian-omnisearch",
+    "tag": "1.31.0",
+    "sha256": {
+      "main.js": "9f2456705d0840f3cccf62a8e99a6fdaf8901939936e44d4dd27fc6b2d522f31",
+      "manifest.json": "26b1ffc250b1d90605f60c132f783e3148dd399e5baf5862040671d86294bc85",
+      "styles.css": "c6a56b1a18ff867f12ebbb3a139060a249704281e1b449003ff487969621a2e6"
+    }
+  },
+  "obsidian-linter": {
+    "repo": "platers/obsidian-linter",
+    "tag": "1.34.1",
+    "sha256": {
+      "main.js": "b3134716933daa397214aa94ce019e1e27db8054621dcea87bdbe91ff5acae19",
+      "manifest.json": "796d0c47d50d1c56c53ce604da45e5674763e7cd57fd5fa1ccc1a2d31fef4e91",
+      "styles.css": "aeda3a668070de1e48650d1613a96bd018e0b7b3aa5fabdc85263589f1198634"
+    }
+  },
+  "obsidian-git": {
+    "repo": "vinzent03/obsidian-git",
+    "tag": "2.41.1",
+    "sha256": {
+      "main.js": "28a18afcab1d2f152a0d3c89aff38e2a97ad0be1aeaaf99630613233bbec6c1b",
+      "manifest.json": "5d4d0f411518636c1d2a4831425a8e3487b925b5bd413be0ca22e6de38a593f7",
+      "styles.css": "bfa8fbd45fe49ff340fdb196b84badd631aede5d6f96740f336ea779cd441005"
+    }
+  }
+}

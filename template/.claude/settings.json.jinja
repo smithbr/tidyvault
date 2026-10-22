@@ -7,7 +7,23 @@
       "Bash(git rebase *)",
       "Bash(git filter-branch *)",
       "Bash(git filter-repo *)",
-      "Bash(git commit --amend*)"
+      "Bash(git commit --amend*)",
+      "Bash(curl *)",
+      "Bash(wget *)",
+[[% if store %]]
+      "Read(/_files/_private/**)",
+      "Edit(/_files/_private/**)",
+      "Write(/_files/_private/**)",
+      "Read([[= store_path =]]/_private/**)",
+      "Edit([[= store_path =]]/_private/**)",
+      "Write([[= store_path =]]/_private/**)",
+[[% endif %]]
+[[% if backup %]]
+      "Read(~/.config/restic/**)",
+      "Edit(~/.config/restic/**)",
+      "Write(~/.config/restic/**)",
+[[% endif %]]
+      "Bash(op *)"
     ],
     "ask": [
 [[% if store %]]
@@ -17,8 +33,30 @@
 [[% endif %]]
 [[% if obsidian %]]
       "Edit(/.obsidian/**)",
-      "Write(/.obsidian/**)"
+      "Write(/.obsidian/**)",
 [[% endif %]]
+      "Bash(git config *)",
+      "Bash(git -c *)",
+      "Edit(/.git/**)",
+      "Write(/.git/**)",
+      "Edit(/AGENTS.md)",
+      "Write(/AGENTS.md)",
+      "Edit(/Agents/*.md)",
+      "Write(/Agents/*.md)",
+      "Edit(/Agents/roles/**)",
+      "Write(/Agents/roles/**)",
+      "Edit(/Agents/local/**)",
+      "Write(/Agents/local/**)",
+      "Edit(/Agents/templates/**)",
+      "Write(/Agents/templates/**)",
+      "Edit(/Agents/views/**)",
+      "Write(/Agents/views/**)",
+      "Edit(/.scripts/**)",
+      "Write(/.scripts/**)",
+      "Edit(/.claude/**)",
+      "Write(/.claude/**)",
+      "Edit(/.tidyvault.yml)",
+      "Write(/.tidyvault.yml)"
     ],
     "allow": [
       "Bash(python3 .scripts/vault-lint*)"

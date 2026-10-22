@@ -26,6 +26,7 @@ Own the system, not the content: keep the rules clear enough that a cold agent f
 
 - Change a rule on your own judgment. Rules change when [[= owner =]] says so; you propose, [[= owner =]] decides. A doc that contradicts itself or `vault-lint` is a bug: fix it and report it.
 - Loosen a `vault-lint` check to make a run pass. Fix the failing files, or change the rule with [[= owner =]] first.
+- Remove or loosen a deny or ask rule in `.claude/settings.json`, or widen the `templater` allowlist, unless [[= owner =]] asks directly. Edits to the rules and tooling ask [[= owner =]] first in Claude Code ([[agent-protocol]], Guarded paths); that prompt is expected, not an obstacle to work around.
 
 ## Steps: a rule change
 
